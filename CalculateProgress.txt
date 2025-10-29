@@ -1,4 +1,4 @@
-// CalculateProgress.c — % and stable end day from START_DATE+TIME + (est+down-prog)
+// CalculateProgress.c — % and planned end timestamp from START_DATE+TIME + (est+down-prog)
 #include "apdefap.h"
 
 static int parse_hhmm(const char* s,int* h,int* m){
@@ -20,6 +20,7 @@ void CalculateProgress(const char* startTimeTag,
                        const char* estDurationTag,
                        const char* downtimeTag,
                        const char* percentageTag,
+                       const char* endTimeTag,
                        const char* endDayTag,
                        const char* progRuntimeTag)
 {
@@ -35,12 +36,12 @@ void CalculateProgress(const char* startTimeTag,
     if(pct<0.0) pct=0.0; if(pct>100.0) pct=100.0;
     SetTagDouble(percentageTag, pct);
 
-    if(endDayTag && endDayTag[0]!='\0'){
+    if((endDayTag && endDayTag[0]!='\0') || (endTimeTag && endTimeTag[0]!='\0')){
         const char* st = GetTagChar(startTimeTag);
         const char* sd = GetTagChar(startDateTag);
         int hh=0, mm=0, dd=0, mon=0, yy=0;
         if(st&&sd&&parse_hhmm(st,&hh,&mm)&&parse_ddmmyyyy(sd,&dd,&mon,&yy)){
-            struct tm t; time_t start_epoch, end_epoch; struct tm* pe; char outD[11];
+            struct tm t; time_t start_epoch, end_epoch; struct tm* pe; char outD[11]; char outT[6];
             double remain = total - prog; if(remain<0.0) remain=0.0;
 
             t.tm_sec=0; t.tm_min=mm; t.tm_hour=hh; t.tm_mday=dd; t.tm_mon=mon-1; t.tm_year=yy-1900;
@@ -50,7 +51,9 @@ void CalculateProgress(const char* startTimeTag,
             end_epoch=start_epoch + (time_t)(remain + 0.5);
             pe=localtime(&end_epoch); if(!pe) return;
             sprintf(outD,"%02d/%02d/%04d",pe->tm_mday,pe->tm_mon+1,pe->tm_year+1900);
-            SetTagChar(endDayTag,outD);
+            sprintf(outT,"%02d:%02d",pe->tm_hour,pe->tm_min);
+            if(endDayTag && endDayTag[0]!='\0') SetTagChar(endDayTag,outD);
+            if(endTimeTag && endTimeTag[0]!='\0') SetTagChar(endTimeTag,outT);
         }
     }
 }

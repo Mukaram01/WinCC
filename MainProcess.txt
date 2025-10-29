@@ -6,8 +6,8 @@
                               const char* formattedDayTag);
      - CalculateProgress(const char* startTimeTag, const char* startDateTag,
                          const char* estDurationTag, const char* downtimeTag,
-                         const char* percentageTag, const char* endDayTag,
-                         const char* progRuntimeTag);
+                         const char* percentageTag, const char* endTimeTag,
+                         const char* endDayTag, const char* progRuntimeTag);
      - CalculateEstimatedEndTime(const char* archiveName, const char* operationTag,
                                  const char* partTag, const char* resultTag);
      - UpdateFormattedTime(const char* sourceTag, const char* targetTag);
@@ -42,6 +42,7 @@ void   CalculateProgress(const char* startTimeTag,
                          const char* estDurationTag,
                          const char* downtimeTag,
                          const char* percentageTag,
+                         const char* endTimeTag,
                          const char* endDayTag,
                          const char* progRuntimeTag);
 int    IsMasterServer(void);
@@ -261,7 +262,7 @@ void MainProcess(
 
         /* Initial % and planned end day (anchored) */
         CalculateProgress(startFormattedTimeTag, startFormattedDateTag, estDurationTag,
-                          downTimeTag, percentageTag, formattedDayTag, runTimeTag);
+                          downTimeTag, percentageTag, formattedTimeTag, formattedDayTag, runTimeTag);
     }
     else {
         /* ----- Same job: accumulate runtime slice & refresh % ----- */
@@ -271,7 +272,9 @@ void MainProcess(
 
         /* Keep % up to date, but don't rewrite end day/time during the job */
         CalculateProgress(startFormattedTimeTag, startFormattedDateTag, estDurationTag,
-                          downTimeTag, percentageTag, "" /* skip end-day rewrite */, runTimeTag);
+                          downTimeTag, percentageTag,
+                          "" /* skip planned-end time rewrite */,
+                          "" /* skip planned-end day rewrite */, runTimeTag);
     }
 
     /* HH:MM live displays */
