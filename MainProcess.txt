@@ -1,0 +1,280 @@
+/* MainProcess.c — ProductionEvents writer, stable ETA (%), dynamic machine name
+   Requires:
+     - UpdateStartTime(const char* timeTag, const char* dateTag);
+     - UpdateFormattedEndTime(const char* startTimeTag, const char* startDateTag,
+                              const char* estDurationTag, const char* formattedTimeTag,
+                              const char* formattedDayTag);
+     - CalculateProgress(const char* startTimeTag, const char* startDateTag,
+                         const char* estDurationTag, const char* downtimeTag,
+                         const char* percentageTag, const char* endDayTag,
+                         const char* progRuntimeTag);
+     - CalculateEstimatedEndTime(const char* archiveName, const char* operationTag,
+                                 const char* partTag, const char* resultTag);
+     - UpdateFormattedTime(const char* sourceTag, const char* targetTag);
+     - AccumulateRuntime(double currentCycleTime, double* previousCycleTime, double* totalRuntime);
+     - CompareIdentifiers(…);
+     - WriteValuesToUserArchive_V2() with the ProductionEvents layout:
+         F1 MachineName, F2 Order, F3 Serial, F4 Operation, F5 Part,
+         F6 RuntimeHHMM, F7 DowntimeHHMM, F8 StartDate, F9 StartTime,
+         F10 PlannedEndDate, F11 PlannedEndTime.
+*/
+
+#include "apdefap.h"
+
+#define TAG_STR_LEN             256
+#define MIN_RUNTIME_THRESHOLD   300   /* seconds */
+
+/* ---------- Forward declarations (keep signatures exactly as shown) ---------- */
+double AccumulateRuntime(double currentCycleTime, double* previousCycleTime, double* totalRuntime);
+void   UpdateFormattedTime(const char* sourceTag, const char* targetTag);
+void   UpdateStartTime(const char* timeTag, const char* dateTag);
+void   UpdateFormattedEndTime(const char* startTimeTag,
+                              const char* startDateTag,
+                              const char* estDurationTag,
+                              const char* formattedTimeTag,
+                              const char* formattedDayTag);
+void   CalculateEstimatedEndTime(const char* archiveName,
+                                 const char* operationTag,
+                                 const char* partTag,
+                                 const char* resultTag);
+void   CalculateProgress(const char* startTimeTag,
+                         const char* startDateTag,
+                         const char* estDurationTag,
+                         const char* downtimeTag,
+                         const char* percentageTag,
+                         const char* endDayTag,
+                         const char* progRuntimeTag);
+int    IsMasterServer(void);
+void   GetTagValues(const char* orderTag, const char* serialTag,
+                    const char* operationTag, const char* partTag,
+                    char* orderValue, char* serialValue,
+                    char* operationValue, char* partValue);
+int    CompareIdentifiers(const char* curOrder, const char* curSerial, const char* curOp, const char* curPart,
+                          const char* prevOrder, const char* prevSerial, const char* prevOp, const char* prevPart);
+
+/* Writer for ProductionEvents with DowntimeHHMM at field #7 */
+void   WriteValuesToUserArchive_V2(const char* archiveName,   /* "ProductionEvents" */
+                                   const char* machineName,
+                                   const char* orderNumber,
+                                   const char* serialNumber,
+                                   const char* operationNumber,
+                                   const char* partNumber,
+                                   const char* runtimeHHMM,    /* field #6 */
+                                   const char* downtimeHHMM,   /* field #7 */
+                                   const char* startDate,      /* field #8 */
+                                   const char* startTime,      /* field #9 */
+                                   const char* plannedEndDate, /* field #10 */
+                                   const char* plannedEndTime  /* field #11 */
+                                   );
+
+/* ---------- Local helpers (C89-safe) ---------- */
+static void secs_to_HHMM(double secs, char out[6])
+{
+    int total;
+    int h;
+    int m;
+    if (secs < 0.0) secs = 0.0;
+    total = (int)secs;
+    h = total / 3600;
+    m = (total % 3600) / 60;
+    sprintf(out, "%02d:%02d", h, m);
+}
+
+/* simple parsers for "HH:MM" and "DD/MM/YYYY" */
+static int parse_hhmm(const char* s, int* hh, int* mm)
+{
+    if (!s) return 0;
+    if (s[2] != ':') return 0;
+    if (s[0]<'0'||s[0]>'9'|| s[1]<'0'||s[1]>'9'|| s[3]<'0'||s[3]>'9'|| s[4]<'0'||s[4]>'9') return 0;
+    *hh = (s[0]-'0')*10 + (s[1]-'0');
+    *mm = (s[3]-'0')*10 + (s[4]-'0');
+    return (*hh>=0 && *hh<=23 && *mm>=0 && *mm<=59);
+}
+static int parse_ddmmyyyy(const char* s, int* dd, int* mo, int* yy)
+{
+    if (!s) return 0;
+    if (s[2] != '/' || s[5] != '/') return 0;
+    if (s[0]<'0'||s[0]>'9'|| s[1]<'0'||s[1]>'9'|| s[3]<'0'||s[3]>'9'|| s[4]<'0'||s[4]>'9') return 0;
+    if (s[6]<'0'||s[6]>'9'|| s[7]<'0'||s[7]>'9'|| s[8]<'0'||s[8]>'9'|| s[9]<'0'||s[9]>'9') return 0;
+    *dd = (s[0]-'0')*10 + (s[1]-'0');
+    *mo = (s[3]-'0')*10 + (s[4]-'0');
+    *yy = (s[6]-'0')*1000 + (s[7]-'0')*100 + (s[8]-'0')*10 + (s[9]-'0');
+    return (*dd>=1 && *dd<=31 && *mo>=1 && *mo<=12 && *yy>=1970);
+}
+
+/* compute planned end from THIS job's start date+time + ETA seconds */
+static void planned_from_start_and_eta(const char* startDate, const char* startTime,
+                                       double etaSecs,
+                                       char outDate[11], char outTime[6])
+{
+    int dd=0, mo=0, yy=0, hh=0, mm=0;
+    struct tm t;
+    time_t start_epoch;
+    time_t end_epoch;
+    struct tm* pe;
+
+    outDate[0] = '\0';
+    outTime[0] = '\0';
+
+    if (!parse_ddmmyyyy(startDate, &dd, &mo, &yy)) return;
+    if (!parse_hhmm(startTime, &hh, &mm)) return;
+
+    if (etaSecs < 0.0) etaSecs = 0.0;
+
+    t.tm_sec  = 0;
+    t.tm_min  = mm;
+    t.tm_hour = hh;
+    t.tm_mday = dd;
+    t.tm_mon  = mo - 1;
+    t.tm_year = yy - 1900;
+    t.tm_wday = 0; t.tm_yday = 0; t.tm_isdst = -1;
+
+    start_epoch = mktime(&t);
+    if (start_epoch == (time_t)-1) return;
+
+    end_epoch = start_epoch + (time_t)(etaSecs + 0.5);
+    pe = localtime(&end_epoch);
+    if (!pe) return;
+
+    sprintf(outDate, "%02d/%02d/%04d", pe->tm_mday, pe->tm_mon + 1, pe->tm_year + 1900);
+    sprintf(outTime, "%02d:%02d",      pe->tm_hour,  pe->tm_min);
+}
+
+/* ========================================================================= */
+void MainProcess(
+    const char* archiveName,             /* "ProductionEvents" */
+    const char* machineName,             /* "MNA_0269", "MNA_0270", ... */
+    const char* currentOrderTag,
+    const char* currentSerialTag,
+    const char* currentOperationTag,
+    const char* currentPartTag,
+    const char* currentCycleTag,
+    const char* previousOrderTag,
+    const char* previousSerialTag,
+    const char* previousOperationTag,
+    const char* previousPartTag,
+    const char* previousCycleTag,
+    const char* totalRuntimeTag,
+    const char* estDurationTag,          /* seconds (ETA) */
+    const char* formattedTimeTag,        /* planned end HH:MM (display) */
+    const char* startFormattedTimeTag,   /* HH:MM */
+    const char* startFormattedDateTag,   /* DD/MM/YYYY */
+    const char* formattedDayTag,         /* planned end day DD/MM/YYYY (display) */
+    const char* runFormattedTimeTag,     /* HH:MM (display) */
+    const char* runTimeTag,              /* seconds */
+    const char* downTimeTag,             /* seconds */
+    const char* downFormattedTimeTag,    /* HH:MM (display) */
+    const char* percentageTag
+)
+{
+    /* Declarations (C89) */
+    char curOrder[TAG_STR_LEN] = "";
+    char curSerial[TAG_STR_LEN] = "";
+    char curOp[TAG_STR_LEN] = "";
+    char curPart[TAG_STR_LEN] = "";
+
+    char prevOrder[TAG_STR_LEN] = "";
+    char prevSerial[TAG_STR_LEN] = "";
+    char prevOp[TAG_STR_LEN] = "";
+    char prevPart[TAG_STR_LEN] = "";
+
+    const char* s;
+    double curCycle;
+    double prevCycle;
+    double totalRt;
+    int isNew;
+
+    /* Use numeric history for ETA (change to "ETAHistory" later if you create it) */
+    const char* ETA_ARCHIVE = "OperationDataArchive";
+
+    if (IsMasterServer() != 1) return;
+
+    /* Read current identifiers */
+    GetTagValues(currentOrderTag, currentSerialTag, currentOperationTag, currentPartTag,
+                 curOrder, curSerial, curOp, curPart);
+
+    /* Read previous identifiers */
+    s = GetTagChar(previousOrderTag);     if (s) { strncpy(prevOrder, s, TAG_STR_LEN-1); prevOrder[TAG_STR_LEN-1] = 0; }
+    s = GetTagChar(previousSerialTag);    if (s) { strncpy(prevSerial, s, TAG_STR_LEN-1); prevSerial[TAG_STR_LEN-1] = 0; }
+    s = GetTagChar(previousOperationTag); if (s) { strncpy(prevOp, s, TAG_STR_LEN-1);     prevOp[TAG_STR_LEN-1] = 0; }
+    s = GetTagChar(previousPartTag);      if (s) { strncpy(prevPart, s, TAG_STR_LEN-1);   prevPart[TAG_STR_LEN-1] = 0; }
+
+    /* Numeric accumulators */
+    curCycle  = GetTagDouble(currentCycleTag);
+    prevCycle = GetTagDouble(previousCycleTag);
+    totalRt   = GetTagDouble(totalRuntimeTag);
+
+    /* Detect job change */
+    isNew = (CompareIdentifiers(curOrder, curSerial, curOp, curPart,
+                                prevOrder, prevSerial, prevOp, prevPart) != 0);
+
+    if (isNew) {
+        /* ----- Flush previous job row (clean snapshot) ----- */
+        if (prevOp[0] || prevPart[0]) {
+            double lastRtSeconds = GetTagDouble(totalRuntimeTag);
+            const char* sDatePrev = GetTagChar(startFormattedDateTag);
+            const char* sTimePrev = GetTagChar(startFormattedTimeTag);
+            const char* downHMPrev = GetTagChar(downFormattedTimeTag);
+            double etaSecsPrev = GetTagDouble(estDurationTag);
+
+            char runHHMM[6];
+            char endDate[11];
+            char endTime[6];
+
+            if (!downHMPrev) downHMPrev = "";
+
+            secs_to_HHMM(lastRtSeconds, runHHMM);
+            planned_from_start_and_eta(sDatePrev, sTimePrev, etaSecsPrev, endDate, endTime);
+
+            if (lastRtSeconds >= MIN_RUNTIME_THRESHOLD &&
+                machineName && *machineName &&
+                sDatePrev && *sDatePrev &&
+                sTimePrev && *sTimePrev &&
+                endDate[0] && endTime[0]) {
+
+                WriteValuesToUserArchive_V2(archiveName, machineName,
+                                            prevOrder, prevSerial, prevOp, prevPart,
+                                            runHHMM,                /* RuntimeHHMM */
+                                            downHMPrev,             /* DowntimeHHMM */
+                                            sDatePrev, sTimePrev,   /* StartDate/StartTime */
+                                            endDate, endTime);      /* PlannedEndDate/Time */
+            }
+        }
+
+        /* ----- Start new job ----- */
+        SetTagChar(previousOrderTag,     curOrder);
+        SetTagChar(previousSerialTag,    curSerial);
+        SetTagChar(previousOperationTag, curOp);
+        SetTagChar(previousPartTag,      curPart);
+        SetTagDouble(previousCycleTag,   curCycle);
+        SetTagDouble(totalRuntimeTag,    0.0);
+
+        /* Stamp start once */
+        UpdateStartTime(startFormattedTimeTag, startFormattedDateTag);
+
+        /* ETA once (seconds) from numeric history */
+        CalculateEstimatedEndTime(ETA_ARCHIVE, currentOperationTag, currentPartTag, estDurationTag);
+
+        /* Planned end (HH:MM & DD/MM/YYYY) from start date+time + ETA */
+        UpdateFormattedEndTime(startFormattedTimeTag, startFormattedDateTag, estDurationTag,
+                               formattedTimeTag, formattedDayTag);
+
+        /* Initial % and planned end day (anchored) */
+        CalculateProgress(startFormattedTimeTag, startFormattedDateTag, estDurationTag,
+                          downTimeTag, percentageTag, formattedDayTag, runTimeTag);
+    }
+    else {
+        /* ----- Same job: accumulate runtime slice & refresh % ----- */
+        totalRt = AccumulateRuntime(curCycle, &prevCycle, &totalRt);
+        SetTagDouble(previousCycleTag, prevCycle);
+        SetTagDouble(totalRuntimeTag,  totalRt);
+
+        /* Keep % up to date, but don't rewrite end day/time during the job */
+        CalculateProgress(startFormattedTimeTag, startFormattedDateTag, estDurationTag,
+                          downTimeTag, percentageTag, "" /* skip end-day rewrite */, runTimeTag);
+    }
+
+    /* HH:MM live displays */
+    UpdateFormattedTime(runTimeTag,  runFormattedTimeTag);
+    UpdateFormattedTime(downTimeTag, downFormattedTimeTag);
+}

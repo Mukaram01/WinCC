@@ -1,0 +1,18 @@
+// CompareIdentifiers.c
+#include "apdefap.h"
+
+#define MATCH 0
+#define NO_MATCH -1
+
+int CompareIdentifiers(const char* curOrder, const char* curSerial, const char* curOp, const char* curPart,
+                       const char* prevOrder, const char* prevSerial, const char* prevOp, const char* prevPart) {
+    if (!curOrder || !curSerial || !curOp || !curPart || !prevOrder || !prevSerial || !prevOp || !prevPart) {
+        return NO_MATCH;
+    }
+
+    if (strcmp(curOrder, prevOrder) == 0 && strcmp(curSerial, prevSerial) == 0 &&
+        strcmp(curOp, prevOp) == 0 && strcmp(curPart, prevPart) == 0) {
+        return MATCH;
+    }
+    return NO_MATCH;
+}

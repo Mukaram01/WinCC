@@ -1,0 +1,21 @@
+// UpdateStartTime.c — writes "HH:MM" and "DD/MM/YYYY"
+#include "apdefap.h"
+
+void UpdateStartTime(const char* timeTag, const char* dateTag)
+{
+    time_t now;
+    struct tm* tm_info;
+    char formattedTime[6];
+    char formattedDate[11];
+
+    now = time(NULL);
+    tm_info = localtime(&now);
+    if (!tm_info) return;
+
+    sprintf(formattedTime, "%02d:%02d", tm_info->tm_hour, tm_info->tm_min);
+    sprintf(formattedDate, "%02d/%02d/%04d",
+            tm_info->tm_mday, tm_info->tm_mon + 1, 1900 + tm_info->tm_year);
+
+    SetTagChar(timeTag, formattedTime);
+    SetTagChar(dateTag, formattedDate);
+}

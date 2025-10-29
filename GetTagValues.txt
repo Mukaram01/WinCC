@@ -1,0 +1,18 @@
+// GetTagValues.c — safe string reads
+#include "apdefap.h"
+
+#define TAG_STR_LEN 256
+
+void GetTagValues(const char* orderTag, const char* serialTag, const char* operationTag, const char* partTag,
+                  char* orderValue, char* serialValue, char* operationValue, char* partValue)
+{
+    const char* ord = GetTagChar(orderTag);
+    const char* ser = GetTagChar(serialTag);
+    const char* opr = GetTagChar(operationTag);
+    const char* prt = GetTagChar(partTag);
+
+    strncpy(orderValue,     ord ? ord : "", TAG_STR_LEN - 1);     orderValue[TAG_STR_LEN - 1] = '\0';
+    strncpy(serialValue,    ser ? ser : "", TAG_STR_LEN - 1);     serialValue[TAG_STR_LEN - 1] = '\0';
+    strncpy(operationValue, opr ? opr : "", TAG_STR_LEN - 1);     operationValue[TAG_STR_LEN - 1] = '\0';
+    strncpy(partValue,      prt ? prt : "", TAG_STR_LEN - 1);     partValue[TAG_STR_LEN - 1] = '\0';
+}

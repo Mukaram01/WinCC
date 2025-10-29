@@ -1,0 +1,80 @@
+/* WriteValuesToUserArchive_V2.c — ProductionEvents writer (human-first)
+   Archive field order (1-based):
+     1  MachineName       (String)
+     2  OrderNumber       (String)
+     3  SerialNumber      (String)
+     4  OperationNumber   (String)
+     5  PartNumber        (String)
+     6  RuntimeHHMM       (String, "HH:MM")
+     7  DowntimeHHMM      (String, "HH:MM")
+     8  StartDate         (String, "DD/MM/YYYY")
+     9  StartTime         (String, "HH:MM")
+     10 PlannedEndDate    (String, "DD/MM/YYYY")
+     11 PlannedEndTime    (String, "HH:MM")
+*/
+
+#include "apdefap.h"
+
+/* --- field indices for ProductionEvents --- */
+#define F_MACHINE        1
+#define F_ORDER          2
+#define F_SERIAL         3
+#define F_OPERATION      4
+#define F_PART           5
+#define F_RUNTIME_HHMM   6
+#define F_DOWNTIME_HHMM  7
+#define F_START_DATE     8
+#define F_START_TIME     9
+#define F_END_DATE       10
+#define F_END_TIME       11
+
+/* Safe fallback for NULL strings */
+static const char* nz(const char* s) { return s ? s : ""; }
+
+void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvents" */
+                                 const char* machineName,
+                                 const char* orderNumber,
+                                 const char* serialNumber,
+                                 const char* operationNumber,
+                                 const char* partNumber,
+                                 const char* runtimeHHMM,     /* "HH:MM" */
+                                 const char* downtimeHHMM,    /* "HH:MM" */
+                                 const char* startDate,       /* "DD/MM/YYYY" */
+                                 const char* startTime,       /* "HH:MM" */
+                                 const char* plannedEndDate,  /* "DD/MM/YYYY" */
+                                 const char* plannedEndTime)  /* "HH:MM" */
+{
+    UAHCONNECT hCon = 0;
+    UAHARCHIVE hArc = 0;
+    int ok;
+
+    /* Connect */
+    ok = uaConnect(&hCon);
+    if (!ok) return;
+
+    /* Locate archive by name */
+    ok = uaQueryArchiveByName(hCon, archiveName, &hArc);
+    if (ok && hArc) {
+        /* Open, set fields, insert */
+        ok = uaArchiveOpen(hArc);
+        if (ok) {
+            uaArchiveSetFieldValueString(hArc, F_MACHINE,       nz(machineName));
+            uaArchiveSetFieldValueString(hArc, F_ORDER,         nz(orderNumber));
+            uaArchiveSetFieldValueString(hArc, F_SERIAL,        nz(serialNumber));
+            uaArchiveSetFieldValueString(hArc, F_OPERATION,     nz(operationNumber));
+            uaArchiveSetFieldValueString(hArc, F_PART,          nz(partNumber));
+            uaArchiveSetFieldValueString(hArc, F_RUNTIME_HHMM,  nz(runtimeHHMM));
+            uaArchiveSetFieldValueString(hArc, F_DOWNTIME_HHMM, nz(downtimeHHMM));
+            uaArchiveSetFieldValueString(hArc, F_START_DATE,    nz(startDate));
+            uaArchiveSetFieldValueString(hArc, F_START_TIME,    nz(startTime));
+            uaArchiveSetFieldValueString(hArc, F_END_DATE,      nz(plannedEndDate));
+            uaArchiveSetFieldValueString(hArc, F_END_TIME,      nz(plannedEndTime));
+
+            uaArchiveInsert(hArc);      /* ignore return; caller already validated */
+            uaArchiveClose(hArc);
+        }
+        uaReleaseArchive(hArc);
+    }
+
+    uaDisconnect(hCon);
+}

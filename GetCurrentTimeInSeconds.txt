@@ -1,0 +1,6 @@
+int GetCurrentTimeInSeconds() {
+    time_t now = time(NULL);
+    struct tm* tm_info = localtime(&now);
+    if (!tm_info) return 0;
+    return tm_info->tm_hour * 3600 + tm_info->tm_min * 60 + tm_info->tm_sec;
+}

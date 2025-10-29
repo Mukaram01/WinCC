@@ -1,0 +1,72 @@
+// CalculateEstimatedEndTime.c — same signature; median seconds
+#include "apdefap.h"
+
+#define MIN_REQUIRED_SAMPLES 3
+#define DEFAULT_ETA_SECONDS  3600
+
+int compareDoubles(const void* a, const void* b); /* from CompareDoubles.c */
+
+void CalculateEstimatedEndTime(const char* archiveName,
+                               const char* operationTag,
+                               const char* partTag,
+                               const char* resultTag)
+{
+    UAHCONNECT hConnect = 0;
+    UAHARCHIVE hArchive = 0;
+    double* runTimes = 0;
+    int capacity = 128, count = 0;
+    double median = DEFAULT_ETA_SECONDS;
+
+    const char* operationNumber = GetTagChar(operationTag);
+    const char* partNumber      = GetTagChar(partTag);
+
+    if (!operationNumber || !*operationNumber || !partNumber || !*partNumber) {
+        SetTagDouble(resultTag, DEFAULT_ETA_SECONDS);
+        return;
+    }
+
+    if (!uaConnect(&hConnect)) goto cleanup;
+    if (!uaQueryArchiveByName(hConnect, archiveName, &hArchive)) goto cleanup;
+    if (!uaArchiveOpen(hArchive)) goto cleanup;
+
+    runTimes = (double*)malloc(sizeof(double) * capacity);
+    if (!runTimes) goto cleanup;
+
+    if (uaArchiveMoveFirst(hArchive)) {
+        do {
+            char bufOp[64] = "", bufPart[64] = "";
+            double rt = 0.0;
+
+            uaArchiveGetFieldValueString(hArchive, 3, bufOp, sizeof(bufOp));
+            uaArchiveGetFieldValueString(hArchive, 4, bufPart, sizeof(bufPart));
+
+            if (strcmp(bufOp, operationNumber) == 0 && strcmp(bufPart, partNumber) == 0) {
+                if (uaArchiveGetFieldValueDouble(hArchive, 5, &rt)) {
+                    if (rt > 0.0) {
+                        if (count >= capacity) {
+                            int newcap = capacity * 2;
+                            double* tmp = (double*)realloc(runTimes, sizeof(double) * newcap);
+                            if (!tmp) break;
+                            runTimes = tmp; capacity = newcap;
+                        }
+                        runTimes[count++] = rt;
+                    }
+                }
+            }
+        } while (uaArchiveMoveNext(hArchive));
+    }
+
+    if (count >= MIN_REQUIRED_SAMPLES) {
+        qsort(runTimes, count, sizeof(double), compareDoubles);
+        if (count & 1) median = runTimes[count / 2];
+        else           median = 0.5 * (runTimes[count / 2 - 1] + runTimes[count / 2]);
+    } else {
+        median = DEFAULT_ETA_SECONDS;
+    }
+
+cleanup:
+    if (runTimes) free(runTimes);
+    if (hArchive) { uaArchiveClose(hArchive); uaReleaseArchive(hArchive); }
+    if (hConnect) { uaDisconnect(hConnect); }
+    SetTagDouble(resultTag, median);
+}

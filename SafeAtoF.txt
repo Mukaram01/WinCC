@@ -1,0 +1,6 @@
+double SafeAtoF(const char* str) {
+    /* Declarations not needed */
+    if (!str || *str == '\0')
+        return 0.0;
+    return atof(str);
+}

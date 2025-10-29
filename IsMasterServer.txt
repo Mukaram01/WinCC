@@ -1,0 +1,15 @@
+#include "apdefap.h"
+#define IS_MASTER 1
+
+int IsMasterServer(void)
+{
+    int rm_master = GetTagWord("@RM_MASTER");   /* 1 = master, 0 = not, else = read error */
+    int state = 0;
+
+    if (rm_master == 1) return IS_MASTER;       /* master */
+    if (rm_master == 0) return 0;               /* standby/not master */
+
+    /* Fallback for older projects or read glitches */
+    state = GetTagWord("@RedundantServerState");/* in your setup: 1 = master */
+    return (state == 1) ? IS_MASTER : 0;
+}
