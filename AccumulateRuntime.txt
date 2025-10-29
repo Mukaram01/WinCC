@@ -1,11 +1,23 @@
 // AccumulateRuntime.c — additive slice accumulation
 #include "apdefap.h"
-
 double AccumulateRuntime(double currentCycleTime, double* previousCycleTime, double* totalRuntime)
 {
+    double prev;
+    double delta;
+
     if (!previousCycleTime || !totalRuntime) return 0.0;
-    if (currentCycleTime <= 0.0) return *totalRuntime;
-    *totalRuntime += currentCycleTime;
+
+    prev = *previousCycleTime;
+    if (prev < 0.0) prev = 0.0;  /* treat invalid negative baselines as zero */
+
+    delta = currentCycleTime - prev;
+    if (currentCycleTime > 0.0 && delta > 0.0)
+    {
+        *totalRuntime += delta;
+    }
+
+    /* Always refresh the baseline with the latest sample */
     *previousCycleTime = currentCycleTime;
+
     return *totalRuntime;
 }
