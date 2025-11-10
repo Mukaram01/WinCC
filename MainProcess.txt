@@ -70,18 +70,18 @@ void   WriteValuesToUserArchive_V2(const char* archiveName,   /* "ProductionEven
                                    );
 
 /* ---------- Local helpers (C89-safe) ---------- */
-static void secs_to_HHMM(double secs, char* out, size_t out_len)
+static void secs_to_HHMM(double secs, char* out, size_t outSize)
 {
     int total;
     int h;
     int m;
+    if (!out || outSize == 0) return;
     if (secs < 0.0) secs = 0.0;
     total = (int)secs;
     h = total / 3600;
     m = (total % 3600) / 60;
-    if (out && out_len > 0) {
-        snprintf(out, out_len, "%02d:%02d", h, m);
-    }
+    out[0] = '\0';
+    snprintf(out, outSize, "%02d:%02d", h, m);
 }
 
 /* simple parsers for "HH:MM" and "DD/MM/YYYY" */
@@ -218,16 +218,17 @@ void MainProcess(
             double lastRtSeconds = GetTagDouble(totalRuntimeTag);
             const char* sDatePrev = GetTagChar(startFormattedDateTag);
             const char* sTimePrev = GetTagChar(startFormattedTimeTag);
-            const char* downHMPrev = GetTagChar(downFormattedTimeTag);
             double etaSecsPrev = GetTagDouble(estDurationTag);
 
+            double downSecsPrev = GetTagDouble(downTimeTag);
+
             char runHHMM[16];
+            char downHHMM[16];
             char endDate[11];
             char endTime[6];
 
-            if (!downHMPrev) downHMPrev = "";
-
             secs_to_HHMM(lastRtSeconds, runHHMM, sizeof(runHHMM));
+            secs_to_HHMM(downSecsPrev, downHHMM, sizeof(downHHMM));
             planned_from_start_and_eta(sDatePrev, sTimePrev, etaSecsPrev, endDate, endTime);
 
             if (lastRtSeconds >= MIN_RUNTIME_THRESHOLD &&
@@ -239,7 +240,7 @@ void MainProcess(
                 WriteValuesToUserArchive_V2(archiveName, machineName,
                                             prevOrder, prevSerial, prevOp, prevPart,
                                             runHHMM,                /* RuntimeHHMM */
-                                            downHMPrev,             /* DowntimeHHMM */
+                                            downHHMM,               /* DowntimeHHMM */
                                             sDatePrev, sTimePrev,   /* StartDate/StartTime */
                                             endDate, endTime);      /* PlannedEndDate/Time */
             }
