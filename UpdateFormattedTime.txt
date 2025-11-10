@@ -1,5 +1,6 @@
 // UpdateFormattedTime.c — HH:MM from numeric seconds
 #include "apdefap.h"
+#include <stdio.h>
 
 void UpdateFormattedTime(const char* sourceTag, const char* targetTag)
 {
@@ -7,7 +8,7 @@ void UpdateFormattedTime(const char* sourceTag, const char* targetTag)
     int total;
     int hrs;
     int mins;
-    char buf[6];
+    char buf[16];
 
     secs = GetTagDouble(sourceTag);
     if (secs < 0.0) secs = 0.0;
@@ -16,6 +17,6 @@ void UpdateFormattedTime(const char* sourceTag, const char* targetTag)
     hrs   = total / 3600;
     mins  = (total % 3600) / 60;
 
-    sprintf(buf, "%02d:%02d", hrs, mins);
+    snprintf(buf, sizeof(buf), "%02d:%02d", hrs, mins);
     SetTagChar(targetTag, buf);
 }
