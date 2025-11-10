@@ -17,6 +17,6 @@ void UpdateFormattedTime(const char* sourceTag, const char* targetTag)
     hrs   = total / 3600;
     mins  = (total % 3600) / 60;
 
-    snprintf(buf, sizeof(buf), "%02d:%02d", hrs, mins);
+    sprintf(buf, "%02d:%02d", hrs, mins);
     SetTagChar(targetTag, buf);
 }
