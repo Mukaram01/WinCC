@@ -76,12 +76,13 @@ static void secs_to_HHMM(double secs, char* out, size_t outSize)
     int h;
     int m;
     if (!out || outSize == 0) return;
+    if (outSize < 6) { out[0] = '\0'; return; }
     if (secs < 0.0) secs = 0.0;
     total = (int)secs;
     h = total / 3600;
     m = (total % 3600) / 60;
     out[0] = '\0';
-    snprintf(out, outSize, "%02d:%02d", h, m);
+    sprintf(out, "%02d:%02d", h, m);
 }
 
 /* simple parsers for "HH:MM" and "DD/MM/YYYY" */
