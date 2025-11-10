@@ -1,10 +1,52 @@
 // CalculateEstimatedEndTime.c — same signature; median seconds
 #include "apdefap.h"
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
 
 #define MIN_REQUIRED_SAMPLES 3
 #define DEFAULT_ETA_SECONDS  3600
 
 int compareDoubles(const void* a, const void* b); /* from CompareDoubles.c */
+
+static int parseRuntimeSeconds(const char* runtime, double* seconds)
+{
+    const char* p = runtime;
+    const char* colon = 0;
+    char* endptr = 0;
+    long hours = 0;
+    long minutes = 0;
+
+    if (!runtime || !*runtime || !seconds) {
+        return 0;
+    }
+
+    while (isspace((unsigned char)*p)) {
+        ++p;
+    }
+
+    colon = strchr(p, ':');
+    if (!colon) {
+        return 0;
+    }
+
+    hours = strtol(p, &endptr, 10);
+    if (endptr != colon || hours < 0) {
+        return 0;
+    }
+
+    minutes = strtol(colon + 1, &endptr, 10);
+    while (isspace((unsigned char)*endptr)) {
+        ++endptr;
+    }
+
+    if (*endptr != '\0' || minutes < 0 || minutes >= 60) {
+        return 0;
+    }
+
+    *seconds = (double)hours * 3600.0 + (double)minutes * 60.0;
+    return 1;
+}
 
 void CalculateEstimatedEndTime(const char* archiveName,
                                const char* operationTag,
@@ -34,23 +76,23 @@ void CalculateEstimatedEndTime(const char* archiveName,
 
     if (uaArchiveMoveFirst(hArchive)) {
         do {
-            char bufOp[64] = "", bufPart[64] = "";
-            double rt = 0.0;
+            char bufOp[64] = "", bufPart[64] = "", bufRuntime[32] = "";
+            double seconds = 0.0;
 
-            uaArchiveGetFieldValueString(hArchive, 3, bufOp, sizeof(bufOp));
-            uaArchiveGetFieldValueString(hArchive, 4, bufPart, sizeof(bufPart));
+            uaArchiveGetFieldValueString(hArchive, 4, bufOp, sizeof(bufOp));
+            uaArchiveGetFieldValueString(hArchive, 5, bufPart, sizeof(bufPart));
 
             if (strcmp(bufOp, operationNumber) == 0 && strcmp(bufPart, partNumber) == 0) {
-                if (uaArchiveGetFieldValueDouble(hArchive, 5, &rt)) {
-                    if (rt > 0.0) {
-                        if (count >= capacity) {
-                            int newcap = capacity * 2;
-                            double* tmp = (double*)realloc(runTimes, sizeof(double) * newcap);
-                            if (!tmp) break;
-                            runTimes = tmp; capacity = newcap;
-                        }
-                        runTimes[count++] = rt;
+                uaArchiveGetFieldValueString(hArchive, 6, bufRuntime, sizeof(bufRuntime));
+
+                if (parseRuntimeSeconds(bufRuntime, &seconds) && seconds > 0.0) {
+                    if (count >= capacity) {
+                        int newcap = capacity * 2;
+                        double* tmp = (double*)realloc(runTimes, sizeof(double) * newcap);
+                        if (!tmp) break;
+                        runTimes = tmp; capacity = newcap;
                     }
+                    runTimes[count++] = seconds;
                 }
             }
         } while (uaArchiveMoveNext(hArchive));
