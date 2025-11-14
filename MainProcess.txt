@@ -23,8 +23,6 @@
 */
 
 #include "apdefap.h"
-#include <stdio.h>
-#include <string.h>
 
 #define TAG_STR_LEN             256
 #define MIN_RUNTIME_THRESHOLD   300   /* seconds */

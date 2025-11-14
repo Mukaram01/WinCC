@@ -2,7 +2,6 @@
 #include "apdefap.h"
 #include <ctype.h>
 #include <stdlib.h>
-#include <string.h>
 
 #define MIN_REQUIRED_SAMPLES 3
 #define DEFAULT_ETA_SECONDS  3600

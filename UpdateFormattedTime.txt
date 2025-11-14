@@ -1,6 +1,5 @@
 // UpdateFormattedTime.c — HH:MM from numeric seconds
 #include "apdefap.h"
-#include <stdio.h>
 
 void UpdateFormattedTime(const char* sourceTag, const char* targetTag)
 {
