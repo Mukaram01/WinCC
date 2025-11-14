@@ -1,4 +1,4 @@
-// CalculateProgress.c — % and planned end timestamp from START_DATE+TIME + (est+down-prog)
+// CalculateProgress.c — % and planned end timestamp from START_DATE+TIME + planned duration
 #include "apdefap.h"
 
 static int parse_hhmm(const char* s,int* h,int* m){
@@ -42,13 +42,16 @@ void CalculateProgress(const char* startTimeTag,
         int hh=0, mm=0, dd=0, mon=0, yy=0;
         if(st&&sd&&parse_hhmm(st,&hh,&mm)&&parse_ddmmyyyy(sd,&dd,&mon,&yy)){
             struct tm t; time_t start_epoch, end_epoch; struct tm* pe; char outD[11]; char outT[6];
-            double remain = total - prog; if(remain<0.0) remain=0.0;
+            double plannedDuration = total;
+            double elapsed = prog + down;
+
+            if(plannedDuration < elapsed) plannedDuration = elapsed;
 
             t.tm_sec=0; t.tm_min=mm; t.tm_hour=hh; t.tm_mday=dd; t.tm_mon=mon-1; t.tm_year=yy-1900;
             t.tm_wday=0; t.tm_yday=0; t.tm_isdst=-1;
 
             start_epoch=mktime(&t); if(start_epoch==(time_t)-1) return;
-            end_epoch=start_epoch + (time_t)(remain + 0.5);
+            end_epoch=start_epoch + (time_t)(plannedDuration + 0.5);
             pe=localtime(&end_epoch); if(!pe) return;
             sprintf(outD,"%02d/%02d/%04d",pe->tm_mday,pe->tm_mon+1,pe->tm_year+1900);
             sprintf(outT,"%02d:%02d",pe->tm_hour,pe->tm_min);
