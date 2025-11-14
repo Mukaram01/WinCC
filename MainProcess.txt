@@ -20,7 +20,6 @@
 */
 
 #include "apdefap.h"
-#include <stdio.h>
 
 #define TAG_STR_LEN             256
 #define MIN_RUNTIME_THRESHOLD   300   /* seconds */
@@ -145,6 +144,41 @@ static void planned_from_start_and_eta(const char* startDate, const char* startT
     sprintf(outTime, "%02d:%02d",      pe->tm_hour,  pe->tm_min);
 }
 
+static int start_tags_to_epoch(const char* startDateTag, const char* startTimeTag, time_t* outEpoch)
+{
+    const char* sDate;
+    const char* sTime;
+    int dd = 0;
+    int mo = 0;
+    int yy = 0;
+    int hh = 0;
+    int mm = 0;
+    struct tm t;
+    time_t epoch;
+
+    if (!startDateTag || !startTimeTag || !outEpoch) return 0;
+
+    sDate = GetTagChar(startDateTag);
+    sTime = GetTagChar(startTimeTag);
+    if (!sDate || !sTime) return 0;
+    if (!parse_ddmmyyyy(sDate, &dd, &mo, &yy)) return 0;
+    if (!parse_hhmm(sTime, &hh, &mm)) return 0;
+
+    t.tm_sec  = 0;
+    t.tm_min  = mm;
+    t.tm_hour = hh;
+    t.tm_mday = dd;
+    t.tm_mon  = mo - 1;
+    t.tm_year = yy - 1900;
+    t.tm_wday = 0; t.tm_yday = 0; t.tm_isdst = -1;
+
+    epoch = mktime(&t);
+    if (epoch == (time_t)-1) return 0;
+
+    *outEpoch = epoch;
+    return 1;
+}
+
 /* ========================================================================= */
 void MainProcess(
     const char* archiveName,             /* "ProductionEvents" */
@@ -254,6 +288,7 @@ void MainProcess(
         SetTagChar(previousPartTag,      curPart);
         SetTagDouble(previousCycleTag,   curCycle);
         SetTagDouble(totalRuntimeTag,    0.0);
+        SetTagDouble(downTimeTag,        0.0);
 
         /* Stamp start once */
         UpdateStartTime(startFormattedTimeTag, startFormattedDateTag);
@@ -274,6 +309,21 @@ void MainProcess(
         totalRt = AccumulateRuntime(curCycle, &prevCycle, &totalRt);
         SetTagDouble(previousCycleTag, prevCycle);
         SetTagDouble(totalRuntimeTag,  totalRt);
+
+        {
+            time_t jobStart = (time_t)0;
+            time_t now = time(NULL);
+            double elapsed = 0.0;
+            double downSeconds = 0.0;
+
+            if (start_tags_to_epoch(startFormattedDateTag, startFormattedTimeTag, &jobStart)) {
+                elapsed = difftime(now, jobStart);
+                if (elapsed < 0.0) elapsed = 0.0;
+                downSeconds = elapsed - totalRt;
+                if (downSeconds < 0.0) downSeconds = 0.0;
+                SetTagDouble(downTimeTag, downSeconds);
+            }
+        }
 
         /* Keep % up to date, but don't rewrite end day/time during the job */
         CalculateProgress(startFormattedTimeTag, startFormattedDateTag, estDurationTag,
