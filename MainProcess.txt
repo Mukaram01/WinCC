@@ -347,6 +347,12 @@ void MainProcess(
         SetTagDouble(previousCycleTag,   curCycle);
         SetTagDouble(totalRuntimeTag,    0.0);
 
+        /* Reset downtime bookkeeping so the new job starts clean */
+        SetTagDouble(downTimeTag,        0.0);
+        g_mergeCarryRuntimeSeconds  = 0.0;
+        g_mergeCarryDowntimeSeconds = 0.0;
+        UpdateFormattedTime(downTimeTag, downFormattedTimeTag);
+
         /* Stamp start once */
         UpdateStartTime(startFormattedTimeTag, startFormattedDateTag);
 
