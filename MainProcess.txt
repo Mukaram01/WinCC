@@ -17,13 +17,18 @@
          F1 MachineName, F2 Order, F3 Serial, F4 Operation, F5 Part,
          F6 RuntimeHHMM, F7 DowntimeHHMM, F8 StartDate, F9 StartTime,
          F10 PlannedEndDate, F11 PlannedEndTime.
+   Notes:
+     - Consecutive slices below MERGE_RUNTIME_THRESHOLD for the same identifiers
+       are merged into the last archived row instead of logging duplicates.
 */
 
 #include "apdefap.h"
 #include <stdio.h>
+#include <string.h>
 
 #define TAG_STR_LEN             256
 #define MIN_RUNTIME_THRESHOLD   300   /* seconds */
+#define MERGE_RUNTIME_THRESHOLD  60   /* seconds; slices below this re-use last archive row */
 
 /* ---------- Forward declarations (keep signatures exactly as shown) ---------- */
 double AccumulateRuntime(double currentCycleTime, double* previousCycleTime, double* totalRuntime);
@@ -145,6 +150,67 @@ static void planned_from_start_and_eta(const char* startDate, const char* startT
     sprintf(outTime, "%02d:%02d",      pe->tm_hour,  pe->tm_min);
 }
 
+/* Keep track of the last archived row so that short follow-up slices can be merged */
+typedef struct {
+    char   order[TAG_STR_LEN];
+    char   serial[TAG_STR_LEN];
+    char   operation[TAG_STR_LEN];
+    char   part[TAG_STR_LEN];
+    double runtimeSeconds;
+    double downtimeSeconds;
+    int    hasData;
+} LastArchivedSnapshot;
+
+static LastArchivedSnapshot g_lastArchivedSnapshot = {{0}};
+static double               g_mergeCarryRuntimeSeconds = 0.0;
+static double               g_mergeCarryDowntimeSeconds = 0.0;
+
+static void remember_archived_row(const char* order,
+                                  const char* serial,
+                                  const char* operation,
+                                  const char* part,
+                                  double runtimeSeconds,
+                                  double downtimeSeconds)
+{
+    if (!order) order = "";
+    if (!serial) serial = "";
+    if (!operation) operation = "";
+    if (!part) part = "";
+
+    strncpy(g_lastArchivedSnapshot.order, order, TAG_STR_LEN - 1);
+    g_lastArchivedSnapshot.order[TAG_STR_LEN - 1] = '\0';
+    strncpy(g_lastArchivedSnapshot.serial, serial, TAG_STR_LEN - 1);
+    g_lastArchivedSnapshot.serial[TAG_STR_LEN - 1] = '\0';
+    strncpy(g_lastArchivedSnapshot.operation, operation, TAG_STR_LEN - 1);
+    g_lastArchivedSnapshot.operation[TAG_STR_LEN - 1] = '\0';
+    strncpy(g_lastArchivedSnapshot.part, part, TAG_STR_LEN - 1);
+    g_lastArchivedSnapshot.part[TAG_STR_LEN - 1] = '\0';
+
+    g_lastArchivedSnapshot.runtimeSeconds  = runtimeSeconds;
+    g_lastArchivedSnapshot.downtimeSeconds = downtimeSeconds;
+    g_lastArchivedSnapshot.hasData         = 1;
+
+    g_mergeCarryRuntimeSeconds  = 0.0;
+    g_mergeCarryDowntimeSeconds = 0.0;
+}
+
+static int matches_last_archived(const char* order,
+                                 const char* serial,
+                                 const char* operation,
+                                 const char* part)
+{
+    if (!g_lastArchivedSnapshot.hasData) {
+        return 0;
+    }
+
+    return CompareIdentifiers(order ? order : "", serial ? serial : "",
+                              operation ? operation : "", part ? part : "",
+                              g_lastArchivedSnapshot.order,
+                              g_lastArchivedSnapshot.serial,
+                              g_lastArchivedSnapshot.operation,
+                              g_lastArchivedSnapshot.part) == 0;
+}
+
 /* ========================================================================= */
 void MainProcess(
     const char* archiveName,             /* "ProductionEvents" */
@@ -222,28 +288,54 @@ void MainProcess(
             double etaSecsPrev = GetTagDouble(estDurationTag);
 
             double downSecsPrev = GetTagDouble(downTimeTag);
+            int    matchesLast = matches_last_archived(prevOrder, prevSerial, prevOp, prevPart);
 
-            char runHHMM[16];
-            char downHHMM[16];
-            char endDate[11];
-            char endTime[6];
+            /* Merge consecutive slices (same identifiers) when runtime/downtime are tiny */
+            if (matchesLast &&
+                lastRtSeconds < MERGE_RUNTIME_THRESHOLD &&
+                downSecsPrev < MERGE_RUNTIME_THRESHOLD) {
+                g_mergeCarryRuntimeSeconds  += lastRtSeconds;
+                g_mergeCarryDowntimeSeconds += downSecsPrev;
+            }
+            else {
+                double mergedRuntimeSeconds = lastRtSeconds;
+                double mergedDowntimeSeconds = downSecsPrev;
 
-            secs_to_HHMM(lastRtSeconds, runHHMM, sizeof(runHHMM));
-            secs_to_HHMM(downSecsPrev, downHHMM, sizeof(downHHMM));
-            planned_from_start_and_eta(sDatePrev, sTimePrev, etaSecsPrev, endDate, endTime);
+                if (matchesLast) {
+                    mergedRuntimeSeconds += g_mergeCarryRuntimeSeconds;
+                    mergedDowntimeSeconds += g_mergeCarryDowntimeSeconds;
+                }
+                else {
+                    g_mergeCarryRuntimeSeconds  = 0.0;
+                    g_mergeCarryDowntimeSeconds = 0.0;
+                }
 
-            if (lastRtSeconds >= MIN_RUNTIME_THRESHOLD &&
-                machineName && *machineName &&
-                sDatePrev && *sDatePrev &&
-                sTimePrev && *sTimePrev &&
-                endDate[0] && endTime[0]) {
+                if (mergedRuntimeSeconds >= MIN_RUNTIME_THRESHOLD &&
+                    machineName && *machineName &&
+                    sDatePrev && *sDatePrev &&
+                    sTimePrev && *sTimePrev) {
 
-                WriteValuesToUserArchive_V2(archiveName, machineName,
-                                            prevOrder, prevSerial, prevOp, prevPart,
-                                            runHHMM,                /* RuntimeHHMM */
-                                            downHHMM,               /* DowntimeHHMM */
-                                            sDatePrev, sTimePrev,   /* StartDate/StartTime */
-                                            endDate, endTime);      /* PlannedEndDate/Time */
+                    char runHHMM[16];
+                    char downHHMM[16];
+                    char endDate[11];
+                    char endTime[6];
+
+                    secs_to_HHMM(mergedRuntimeSeconds, runHHMM, sizeof(runHHMM));
+                    secs_to_HHMM(mergedDowntimeSeconds, downHHMM, sizeof(downHHMM));
+                    planned_from_start_and_eta(sDatePrev, sTimePrev, etaSecsPrev, endDate, endTime);
+
+                    if (endDate[0] && endTime[0]) {
+                        WriteValuesToUserArchive_V2(archiveName, machineName,
+                                                    prevOrder, prevSerial, prevOp, prevPart,
+                                                    runHHMM,                /* RuntimeHHMM */
+                                                    downHHMM,               /* DowntimeHHMM */
+                                                    sDatePrev, sTimePrev,   /* StartDate/StartTime */
+                                                    endDate, endTime);      /* PlannedEndDate/Time */
+
+                        remember_archived_row(prevOrder, prevSerial, prevOp, prevPart,
+                                              mergedRuntimeSeconds, mergedDowntimeSeconds);
+                    }
+                }
             }
         }
 
