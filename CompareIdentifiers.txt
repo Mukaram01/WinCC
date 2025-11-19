@@ -4,14 +4,27 @@
 #define MATCH 0
 #define NO_MATCH -1
 
+static int equalsIgnoreCase(const char* a, const char* b)
+{
+    unsigned char ca, cb;
+    if (!a || !b) return 0;
+    while (*a && *b) {
+        ca = (unsigned char)*a;
+        cb = (unsigned char)*b;
+        if (tolower(ca) != tolower(cb)) return 0;
+        ++a; ++b;
+    }
+    return (*a == '\0' && *b == '\0');
+}
+
 int CompareIdentifiers(const char* curOrder, const char* curSerial, const char* curOp, const char* curPart,
                        const char* prevOrder, const char* prevSerial, const char* prevOp, const char* prevPart) {
     if (!curOrder || !curSerial || !curOp || !curPart || !prevOrder || !prevSerial || !prevOp || !prevPart) {
         return NO_MATCH;
     }
 
-    if (strcmp(curOrder, prevOrder) == 0 && strcmp(curSerial, prevSerial) == 0 &&
-        strcmp(curOp, prevOp) == 0 && strcmp(curPart, prevPart) == 0) {
+    if (equalsIgnoreCase(curOrder, prevOrder) && equalsIgnoreCase(curSerial, prevSerial) &&
+        equalsIgnoreCase(curOp, prevOp) && equalsIgnoreCase(curPart, prevPart)) {
         return MATCH;
     }
     return NO_MATCH;

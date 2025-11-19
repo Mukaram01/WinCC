@@ -88,6 +88,20 @@ static void secs_to_HHMM(double secs, char* out, size_t outSize)
     sprintf(out, "%02d:%02d", h, m);
 }
 
+static void set_tag_char_if_valid(const char* tag, const char* value)
+{
+    if (tag && tag[0] != '\0') {
+        SetTagChar(tag, value);
+    }
+}
+
+static void set_tag_double_if_valid(const char* tag, double value)
+{
+    if (tag && tag[0] != '\0') {
+        SetTagDouble(tag, value);
+    }
+}
+
 /* simple parsers for "HH:MM" and "DD/MM/YYYY" */
 static int parse_hhmm(const char* s, int* hh, int* mm)
 {
@@ -252,6 +266,7 @@ void MainProcess(
     double prevCycle;
     double totalRt;
     int isNew;
+    const double MAX_CYCLE_DELTA = 24.0 * 60.0 * 60.0;
 
     /* Use numeric history for ETA (change to "ETAHistory" later if you create it) */
     const char* ETA_ARCHIVE = "OperationDataArchive";
@@ -276,6 +291,12 @@ void MainProcess(
     /* Detect job change */
     isNew = (CompareIdentifiers(curOrder, curSerial, curOp, curPart,
                                 prevOrder, prevSerial, prevOp, prevPart) != 0);
+
+    /* Sanity-check the cycle counter before using it */
+    if ((curCycle - prevCycle) < 0.0 || (curCycle - prevCycle) > MAX_CYCLE_DELTA) {
+        /* Counter wrapped or jumped; reset baseline without accumulating */
+        prevCycle = curCycle;
+    }
 
     if (isNew) {
         /* ----- Flush previous job row (clean snapshot) ----- */
@@ -332,21 +353,26 @@ void MainProcess(
 
                         remember_archived_row(prevOrder, prevSerial, prevOp, prevPart,
                                               mergedRuntimeSeconds, mergedDowntimeSeconds);
+                    } else {
+                        remember_archived_row(prevOrder, prevSerial, prevOp, prevPart, 0.0, 0.0);
                     }
+                } else {
+                    remember_archived_row(prevOrder, prevSerial, prevOp, prevPart, 0.0, 0.0);
                 }
             }
         }
 
         /* ----- Start new job ----- */
-        SetTagChar(previousOrderTag,     curOrder);
-        SetTagChar(previousSerialTag,    curSerial);
-        SetTagChar(previousOperationTag, curOp);
-        SetTagChar(previousPartTag,      curPart);
-        SetTagDouble(previousCycleTag,   curCycle);
-        SetTagDouble(totalRuntimeTag,    0.0);
+        set_tag_char_if_valid(previousOrderTag,     curOrder);
+        set_tag_char_if_valid(previousSerialTag,    curSerial);
+        set_tag_char_if_valid(previousOperationTag, curOp);
+        set_tag_char_if_valid(previousPartTag,      curPart);
+        set_tag_double_if_valid(previousCycleTag,   curCycle);
+        set_tag_double_if_valid(totalRuntimeTag,    0.0);
 
         /* Reset downtime bookkeeping so the new job starts clean */
-        SetTagDouble(downTimeTag,        0.0);
+        set_tag_double_if_valid(downTimeTag,        0.0);
+        set_tag_double_if_valid(runTimeTag,         0.0);
         g_mergeCarryRuntimeSeconds  = 0.0;
         g_mergeCarryDowntimeSeconds = 0.0;
         UpdateFormattedTime(downTimeTag, downFormattedTimeTag);
@@ -368,8 +394,8 @@ void MainProcess(
     else {
         /* ----- Same job: accumulate runtime slice & refresh % ----- */
         totalRt = AccumulateRuntime(curCycle, &prevCycle, &totalRt);
-        SetTagDouble(previousCycleTag, prevCycle);
-        SetTagDouble(totalRuntimeTag,  totalRt);
+        set_tag_double_if_valid(previousCycleTag, prevCycle);
+        set_tag_double_if_valid(totalRuntimeTag,  totalRt);
 
         /* Keep % up to date, but don't rewrite end day/time during the job */
         CalculateProgress(startFormattedTimeTag, startFormattedDateTag, estDurationTag,

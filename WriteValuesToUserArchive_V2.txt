@@ -47,6 +47,11 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
     UAHCONNECT hCon = 0;
     UAHARCHIVE hArc = 0;
     int ok;
+    int insertOk = 0;
+
+    if (!archiveName || archiveName[0] == '\0') {
+        return;
+    }
 
     /* Connect */
     ok = uaConnect(&hCon);
@@ -70,7 +75,10 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
             uaArchiveSetFieldValueString(hArc, F_END_DATE,      nz(plannedEndDate));
             uaArchiveSetFieldValueString(hArc, F_END_TIME,      nz(plannedEndTime));
 
-            uaArchiveInsert(hArc);      /* ignore return; caller already validated */
+            insertOk = uaArchiveInsert(hArc);
+            if (!insertOk) {
+                SetTagWord("ArchiveInsertFailed", 1);
+            }
             uaArchiveClose(hArc);
         }
         uaReleaseArchive(hArc);

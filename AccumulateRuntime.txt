@@ -4,13 +4,26 @@ double AccumulateRuntime(double currentCycleTime, double* previousCycleTime, dou
 {
     double prev;
     double delta;
+    double sanityDeltaLimit = 24.0 * 60.0 * 60.0;
 
     if (!previousCycleTime || !totalRuntime) return 0.0;
 
     prev = *previousCycleTime;
     if (prev < 0.0) prev = 0.0;  /* treat invalid negative baselines as zero */
 
-    delta = currentCycleTime - prev;
+    if ( (currentCycleTime - currentCycleTime) != 0.0 || (prev - prev) != 0.0 )
+    {
+        delta = 0.0;  /* non-finite sample, ignore */
+    }
+    else
+    {
+        delta = currentCycleTime - prev;
+        if (delta < 0.0 || delta > sanityDeltaLimit)
+        {
+            delta = 0.0; /* ignore negative deltas and implausible large jumps */
+        }
+    }
+
     if (currentCycleTime > 0.0 && delta > 0.0)
     {
         *totalRuntime += delta;

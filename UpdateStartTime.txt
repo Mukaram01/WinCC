@@ -12,10 +12,9 @@ void UpdateStartTime(const char* timeTag, const char* dateTag)
     tm_info = localtime(&now);
     if (!tm_info) return;
 
-    sprintf(formattedTime, "%02d:%02d", tm_info->tm_hour, tm_info->tm_min);
-    sprintf(formattedDate, "%02d/%02d/%04d",
-            tm_info->tm_mday, tm_info->tm_mon + 1, 1900 + tm_info->tm_year);
+    strftime(formattedTime, sizeof(formattedTime), "%H:%M", tm_info);
+    strftime(formattedDate, sizeof(formattedDate), "%d/%m/%Y", tm_info);
 
-    SetTagChar(timeTag, formattedTime);
-    SetTagChar(dateTag, formattedDate);
+    if (timeTag && timeTag[0] != '\0') SetTagChar(timeTag, formattedTime);
+    if (dateTag && dateTag[0] != '\0') SetTagChar(dateTag, formattedDate);
 }
