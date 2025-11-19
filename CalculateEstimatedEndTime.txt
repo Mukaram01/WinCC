@@ -1,74 +1,18 @@
 // CalculateEstimatedEndTime.c — same signature; median seconds
 #include "apdefap.h"
-#include <ctype.h>
-#include <stdlib.h>
 
 #define MIN_REQUIRED_SAMPLES 3
 #define DEFAULT_ETA_SECONDS  3600
+#define MAX_RUNTIME_SAMPLES  2048
 
-int compareDoubles(const void* a, const void* b); /* from CompareDoubles.c */
-
-static int parseRuntimeSeconds(const char* runtime, double* seconds)
-{
-    const char* p = runtime;
-    const char* colon = 0;
-    char* endptr = 0;
-    long hours = 0;
-    long minutes = 0;
-
-    if (!runtime || !*runtime || !seconds) {
-        return 0;
-    }
-
-    while (isspace((unsigned char)*p)) {
-        ++p;
-    }
-
-    colon = strchr(p, ':');
-    if (!colon) {
-        return 0;
-    }
-
-    hours = strtol(p, &endptr, 10);
-    if (endptr != colon || hours < 0) {
-        return 0;
-    }
-
-    minutes = strtol(colon + 1, &endptr, 10);
-    while (isspace((unsigned char)*endptr)) {
-        ++endptr;
-    }
-
-    if (*endptr != '\0' || minutes < 0 || minutes >= 60) {
-        return 0;
-    }
-
-    *seconds = (double)hours * 3600.0 + (double)minutes * 60.0;
-    return 1;
-}
-
-static void copyTrim(char* dest, size_t destSize, const char* src)
-{
-    const char* start;
-    const char* end;
-    size_t len;
-
-    if (!dest || destSize == 0) return;
-    dest[0] = '\0';
-    if (!src) return;
-
-    start = src;
-    while (*start && isspace((unsigned char)*start)) ++start;
-    end = start + strlen(start);
-    while (end > start && isspace((unsigned char)*(end - 1))) --end;
-
-    len = (size_t)(end - start);
-    if (len >= destSize) len = destSize - 1;
-    if (len > 0) {
-        memcpy(dest, start, len);
-    }
-    dest[len] = '\0';
-}
+static int parseRuntimeSeconds(const char* runtime, double* seconds);
+static void copyTrim(char* dest, unsigned int destSize, const char* src);
+static unsigned int textLength(const char* text);
+static int textCompare(const char* a, const char* b);
+static int isSpaceChar(char c);
+static const char* skipSpace(const char* text);
+static int parseNonNegativeLong(const char* text, const char** endOut, long* valueOut);
+static void sortDoubles(double* values, int count);
 
 void CalculateEstimatedEndTime(const char* archiveName,
                                const char* operationTag,
@@ -77,8 +21,9 @@ void CalculateEstimatedEndTime(const char* archiveName,
 {
     UAHCONNECT hConnect = 0;
     UAHARCHIVE hArchive = 0;
-    double* runTimes = 0;
-    int capacity = 128, count = 0;
+    double runTimes[MAX_RUNTIME_SAMPLES];
+    int storedSamples = 0;
+    int nextIndex = 0;
     double median = DEFAULT_ETA_SECONDS;
     int archiveOpened = 0;
     double sumSamples = 0.0;
@@ -106,50 +51,241 @@ void CalculateEstimatedEndTime(const char* archiveName,
     if (!uaArchiveOpen(hArchive)) goto cleanup;
     archiveOpened = 1;
 
-    runTimes = (double*)malloc(sizeof(double) * capacity);
-    if (!runTimes) goto cleanup;
-
     if (uaArchiveMoveFirst(hArchive)) {
         do {
-            char bufOp[64] = "", bufPart[64] = "", bufRuntime[32] = "";
+            char bufOp[64] = "";
+            char bufPart[64] = "";
+            char bufRuntime[32] = "";
             double seconds = 0.0;
 
             uaArchiveGetFieldValueString(hArchive, 4, bufOp, sizeof(bufOp));
             uaArchiveGetFieldValueString(hArchive, 5, bufPart, sizeof(bufPart));
 
-            if (strcmp(bufOp, operationNumber) == 0 && strcmp(bufPart, partNumber) == 0) {
+            if (textCompare(bufOp, operationNumber) == 0 && textCompare(bufPart, partNumber) == 0) {
                 uaArchiveGetFieldValueString(hArchive, 6, bufRuntime, sizeof(bufRuntime));
 
                 if (parseRuntimeSeconds(bufRuntime, &seconds) && seconds > 0.0) {
-                    if (count >= capacity) {
-                        int newcap = capacity * 2;
-                        double* tmp = (double*)realloc(runTimes, sizeof(double) * newcap);
-                        if (!tmp) break;
-                        runTimes = tmp; capacity = newcap;
+                    if (storedSamples < MAX_RUNTIME_SAMPLES) {
+                        runTimes[storedSamples++] = seconds;
+                        sumSamples += seconds;
+                        nextIndex = storedSamples;
+                    } else if (MAX_RUNTIME_SAMPLES > 0) {
+                        if (nextIndex >= MAX_RUNTIME_SAMPLES) {
+                            nextIndex = 0;
+                        }
+                        sumSamples -= runTimes[nextIndex];
+                        runTimes[nextIndex++] = seconds;
+                        sumSamples += seconds;
                     }
-                    runTimes[count++] = seconds;
-                    sumSamples += seconds;
+
+                    if (nextIndex >= MAX_RUNTIME_SAMPLES) {
+                        nextIndex = 0;
+                    }
                 }
             }
         } while (uaArchiveMoveNext(hArchive));
     }
 
-    if (count >= MIN_REQUIRED_SAMPLES) {
-        qsort(runTimes, count, sizeof(double), compareDoubles);
-        if (count & 1) median = runTimes[count / 2];
-        else           median = 0.5 * (runTimes[count / 2 - 1] + runTimes[count / 2]);
-    } else if (count > 0) {
-        median = sumSamples / (double)count;
+    if (storedSamples >= MIN_REQUIRED_SAMPLES) {
+        sortDoubles(runTimes, storedSamples);
+        if (storedSamples & 1) {
+            median = runTimes[storedSamples / 2];
+        } else {
+            median = 0.5 * (runTimes[storedSamples / 2 - 1] + runTimes[storedSamples / 2]);
+        }
+    } else if (storedSamples > 0) {
+        median = sumSamples / (double)storedSamples;
     } else {
         median = DEFAULT_ETA_SECONDS;
     }
 
 cleanup:
-    if (runTimes) free(runTimes);
     if (hArchive) {
         if (archiveOpened) uaArchiveClose(hArchive);
         uaReleaseArchive(hArchive);
     }
-    if (hConnect) { uaDisconnect(hConnect); }
+    if (hConnect) {
+        uaDisconnect(hConnect);
+    }
     SetTagDouble(resultTag, median);
+}
+
+static void sortDoubles(double* values, int count)
+{
+    int i;
+    for (i = 1; i < count; ++i) {
+        double current = values[i];
+        int j = i - 1;
+        while (j >= 0 && values[j] > current) {
+            values[j + 1] = values[j];
+            --j;
+        }
+        values[j + 1] = current;
+    }
+}
+
+static int parseRuntimeSeconds(const char* runtime, double* seconds)
+{
+    const char* p;
+    const char* colon;
+    long hours = 0;
+    long minutes = 0;
+
+    if (!runtime || !*runtime || !seconds) {
+        return 0;
+    }
+
+    p = skipSpace(runtime);
+    colon = p;
+    while (*colon && *colon != ':') {
+        ++colon;
+    }
+
+    if (*colon != ':') {
+        return 0;
+    }
+
+    if (!parseNonNegativeLong(p, &colon, &hours)) {
+        return 0;
+    }
+
+    colon = skipSpace(colon);
+    if (*colon != ':') {
+        return 0;
+    }
+
+    p = skipSpace(colon + 1);
+    if (!parseNonNegativeLong(p, &colon, &minutes)) {
+        return 0;
+    }
+
+    colon = skipSpace(colon);
+    if (*colon != '\0' || minutes < 0 || minutes >= 60 || hours < 0) {
+        return 0;
+    }
+
+    *seconds = (double)hours * 3600.0 + (double)minutes * 60.0;
+    return 1;
+}
+
+static int parseNonNegativeLong(const char* text, const char** endOut, long* valueOut)
+{
+    const char* p = text;
+    long value = 0;
+    int digits = 0;
+
+    if (!text || !valueOut) {
+        return 0;
+    }
+
+    while (*p >= '0' && *p <= '9') {
+        long nextValue = value * 10 + (*p - '0');
+        if (nextValue < value) {
+            return 0;
+        }
+        value = nextValue;
+        ++p;
+        ++digits;
+    }
+
+    if (digits == 0) {
+        return 0;
+    }
+
+    if (endOut) {
+        *endOut = p;
+    }
+
+    *valueOut = value;
+    return 1;
+}
+
+static const char* skipSpace(const char* text)
+{
+    const char* p = text;
+    while (p && *p && isSpaceChar(*p)) {
+        ++p;
+    }
+    return p ? p : text;
+}
+
+static int isSpaceChar(char c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' || c == '\v';
+}
+
+static unsigned int textLength(const char* text)
+{
+    unsigned int len = 0;
+    if (!text) {
+        return 0;
+    }
+
+    while (text[len] != '\0') {
+        ++len;
+    }
+
+    return len;
+}
+
+static int textCompare(const char* a, const char* b)
+{
+    unsigned char ca;
+    unsigned char cb;
+
+    if (!a && !b) return 0;
+    if (!a) return -1;
+    if (!b) return 1;
+
+    while (*a || *b) {
+        ca = (unsigned char)*a;
+        cb = (unsigned char)*b;
+        if (ca != cb) {
+            return (ca < cb) ? -1 : 1;
+        }
+        if (*a == '\0') {
+            break;
+        }
+        ++a;
+        ++b;
+    }
+
+    return 0;
+}
+
+static void copyTrim(char* dest, unsigned int destSize, const char* src)
+{
+    const char* start;
+    const char* end;
+    unsigned int len;
+    unsigned int i;
+
+    if (!dest || destSize == 0) {
+        return;
+    }
+
+    dest[0] = '\0';
+    if (!src) {
+        return;
+    }
+
+    start = src;
+    while (*start && isSpaceChar(*start)) {
+        ++start;
+    }
+
+    end = start + textLength(start);
+    while (end > start && isSpaceChar(*(end - 1))) {
+        --end;
+    }
+
+    len = (unsigned int)(end - start);
+    if (len >= destSize) {
+        len = destSize - 1;
+    }
+
+    for (i = 0; i < len; ++i) {
+        dest[i] = start[i];
+    }
+    dest[len] = '\0';
 }
