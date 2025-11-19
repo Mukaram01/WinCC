@@ -47,6 +47,29 @@ static int parseRuntimeSeconds(const char* runtime, double* seconds)
     return 1;
 }
 
+static void copyTrim(char* dest, size_t destSize, const char* src)
+{
+    const char* start;
+    const char* end;
+    size_t len;
+
+    if (!dest || destSize == 0) return;
+    dest[0] = '\0';
+    if (!src) return;
+
+    start = src;
+    while (*start && isspace((unsigned char)*start)) ++start;
+    end = start + strlen(start);
+    while (end > start && isspace((unsigned char)*(end - 1))) --end;
+
+    len = (size_t)(end - start);
+    if (len >= destSize) len = destSize - 1;
+    if (len > 0) {
+        memcpy(dest, start, len);
+    }
+    dest[len] = '\0';
+}
+
 void CalculateEstimatedEndTime(const char* archiveName,
                                const char* operationTag,
                                const char* partTag,
@@ -57,11 +80,23 @@ void CalculateEstimatedEndTime(const char* archiveName,
     double* runTimes = 0;
     int capacity = 128, count = 0;
     double median = DEFAULT_ETA_SECONDS;
+    int archiveOpened = 0;
+    double sumSamples = 0.0;
 
-    const char* operationNumber = GetTagChar(operationTag);
-    const char* partNumber      = GetTagChar(partTag);
+    const char* operationNumberSrc = GetTagChar(operationTag);
+    const char* partNumberSrc      = GetTagChar(partTag);
+    char operationNumber[64];
+    char partNumber[64];
 
-    if (!operationNumber || !*operationNumber || !partNumber || !*partNumber) {
+    if (!archiveName || !*archiveName || !operationTag || !*operationTag || !partTag || !*partTag) {
+        SetTagDouble(resultTag, DEFAULT_ETA_SECONDS);
+        return;
+    }
+
+    copyTrim(operationNumber, sizeof(operationNumber), operationNumberSrc ? operationNumberSrc : "");
+    copyTrim(partNumber, sizeof(partNumber), partNumberSrc ? partNumberSrc : "");
+
+    if (!operationNumber[0] || !partNumber[0]) {
         SetTagDouble(resultTag, DEFAULT_ETA_SECONDS);
         return;
     }
@@ -69,6 +104,7 @@ void CalculateEstimatedEndTime(const char* archiveName,
     if (!uaConnect(&hConnect)) goto cleanup;
     if (!uaQueryArchiveByName(hConnect, archiveName, &hArchive)) goto cleanup;
     if (!uaArchiveOpen(hArchive)) goto cleanup;
+    archiveOpened = 1;
 
     runTimes = (double*)malloc(sizeof(double) * capacity);
     if (!runTimes) goto cleanup;
@@ -92,6 +128,7 @@ void CalculateEstimatedEndTime(const char* archiveName,
                         runTimes = tmp; capacity = newcap;
                     }
                     runTimes[count++] = seconds;
+                    sumSamples += seconds;
                 }
             }
         } while (uaArchiveMoveNext(hArchive));
@@ -101,13 +138,18 @@ void CalculateEstimatedEndTime(const char* archiveName,
         qsort(runTimes, count, sizeof(double), compareDoubles);
         if (count & 1) median = runTimes[count / 2];
         else           median = 0.5 * (runTimes[count / 2 - 1] + runTimes[count / 2]);
+    } else if (count > 0) {
+        median = sumSamples / (double)count;
     } else {
         median = DEFAULT_ETA_SECONDS;
     }
 
 cleanup:
     if (runTimes) free(runTimes);
-    if (hArchive) { uaArchiveClose(hArchive); uaReleaseArchive(hArchive); }
+    if (hArchive) {
+        if (archiveOpened) uaArchiveClose(hArchive);
+        uaReleaseArchive(hArchive);
+    }
     if (hConnect) { uaDisconnect(hConnect); }
     SetTagDouble(resultTag, median);
 }

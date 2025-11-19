@@ -34,7 +34,9 @@ void CalculateProgress(const char* startTimeTag,
     total = est + down;
     pct = (total>0.0)? (prog/total)*100.0 : 0.0;
     if(pct<0.0) pct=0.0; if(pct>100.0) pct=100.0;
-    SetTagDouble(percentageTag, pct);
+    if (percentageTag && percentageTag[0] != '\0') {
+        SetTagDouble(percentageTag, pct);
+    }
 
     if((endDayTag && endDayTag[0]!='\0') || (endTimeTag && endTimeTag[0]!='\0')){
         const char* st = GetTagChar(startTimeTag);
@@ -53,8 +55,8 @@ void CalculateProgress(const char* startTimeTag,
             start_epoch=mktime(&t); if(start_epoch==(time_t)-1) return;
             end_epoch=start_epoch + (time_t)(plannedDuration + 0.5);
             pe=localtime(&end_epoch); if(!pe) return;
-            sprintf(outD,"%02d/%02d/%04d",pe->tm_mday,pe->tm_mon+1,pe->tm_year+1900);
-            sprintf(outT,"%02d:%02d",pe->tm_hour,pe->tm_min);
+            snprintf(outD,sizeof(outD),"%02d/%02d/%04d",pe->tm_mday,pe->tm_mon+1,pe->tm_year+1900);
+            snprintf(outT,sizeof(outT),"%02d:%02d",pe->tm_hour,pe->tm_min);
             if(endDayTag && endDayTag[0]!='\0') SetTagChar(endDayTag,outD);
             if(endTimeTag && endTimeTag[0]!='\0') SetTagChar(endTimeTag,outT);
         }

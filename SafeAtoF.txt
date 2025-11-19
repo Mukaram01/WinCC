@@ -1,6 +1,15 @@
+#include "apdefap.h"
+
 double SafeAtoF(const char* str) {
-    /* Declarations not needed */
+    char* endptr = 0;
+    double value = 0.0;
+
     if (!str || *str == '\0')
         return 0.0;
-    return atof(str);
+
+    value = strtod(str, &endptr);
+    if (endptr == str)
+        return 0.0;
+
+    return value;
 }

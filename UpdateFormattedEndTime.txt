@@ -40,8 +40,8 @@ void UpdateFormattedEndTime(const char* startTimeTag,
     end_epoch = start_epoch + (time_t)(est + 0.5);
 
     pe = localtime(&end_epoch); if(!pe) return;
-    sprintf(outT,"%02d:%02d",pe->tm_hour,pe->tm_min);
-    sprintf(outD,"%02d/%02d/%04d",pe->tm_mday,pe->tm_mon+1,pe->tm_year+1900);
-    SetTagChar(formattedTimeTag,outT);
-    SetTagChar(formattedDayTag,outD);
+    snprintf(outT,sizeof(outT),"%02d:%02d",pe->tm_hour,pe->tm_min);
+    snprintf(outD,sizeof(outD),"%02d/%02d/%04d",pe->tm_mday,pe->tm_mon+1,pe->tm_year+1900);
+    if(formattedTimeTag && formattedTimeTag[0] != '\0') SetTagChar(formattedTimeTag,outT);
+    if(formattedDayTag && formattedDayTag[0] != '\0') SetTagChar(formattedDayTag,outD);
 }
