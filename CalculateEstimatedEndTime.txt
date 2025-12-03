@@ -1,9 +1,15 @@
-// CalculateEstimatedEndTime.c — same signature; median seconds
+// CalculateEstimatedEndTime.c — ETA (seconds) from ProductionEvents history
 #include "apdefap.h"
 
 #define MIN_REQUIRED_SAMPLES 3
 #define DEFAULT_ETA_SECONDS  3600
 #define MAX_RUNTIME_SAMPLES  2048
+
+/* ProductionEvents field indices (1-based) */
+#define F_OPERATION      4
+#define F_PART           5
+#define F_RUNTIME_HHMM   6
+#define F_DOWNTIME_HHMM  7
 
 static int parseRuntimeSeconds(const char* runtime, double* seconds);
 static void copyTrim(char* dest, unsigned int destSize, const char* src);
@@ -56,26 +62,38 @@ void CalculateEstimatedEndTime(const char* archiveName,
             char bufOp[64] = "";
             char bufPart[64] = "";
             char bufRuntime[32] = "";
-            double seconds = 0.0;
+            char bufDowntime[32] = "";
+            double runtimeSeconds = 0.0;
+            double downtimeSeconds = 0.0;
+            double totalSeconds = 0.0;
 
-            uaArchiveGetFieldValueString(hArchive, 4, bufOp, sizeof(bufOp));
-            uaArchiveGetFieldValueString(hArchive, 5, bufPart, sizeof(bufPart));
+            uaArchiveGetFieldValueString(hArchive, F_OPERATION, bufOp, sizeof(bufOp));
+            uaArchiveGetFieldValueString(hArchive, F_PART,      bufPart, sizeof(bufPart));
 
             if (textCompare(bufOp, operationNumber) == 0 && textCompare(bufPart, partNumber) == 0) {
-                uaArchiveGetFieldValueString(hArchive, 6, bufRuntime, sizeof(bufRuntime));
+                uaArchiveGetFieldValueString(hArchive, F_RUNTIME_HHMM,  bufRuntime,  sizeof(bufRuntime));
+                uaArchiveGetFieldValueString(hArchive, F_DOWNTIME_HHMM, bufDowntime, sizeof(bufDowntime));
 
-                if (parseRuntimeSeconds(bufRuntime, &seconds) && seconds > 0.0) {
+                if (!parseRuntimeSeconds(bufRuntime, &runtimeSeconds)) {
+                    runtimeSeconds = 0.0;
+                }
+                if (!parseRuntimeSeconds(bufDowntime, &downtimeSeconds)) {
+                    downtimeSeconds = 0.0;
+                }
+
+                totalSeconds = runtimeSeconds + downtimeSeconds;
+                if (totalSeconds > 0.0) {
                     if (storedSamples < MAX_RUNTIME_SAMPLES) {
-                        runTimes[storedSamples++] = seconds;
-                        sumSamples += seconds;
+                        runTimes[storedSamples++] = totalSeconds;
+                        sumSamples += totalSeconds;
                         nextIndex = storedSamples;
                     } else if (MAX_RUNTIME_SAMPLES > 0) {
                         if (nextIndex >= MAX_RUNTIME_SAMPLES) {
                             nextIndex = 0;
                         }
                         sumSamples -= runTimes[nextIndex];
-                        runTimes[nextIndex++] = seconds;
-                        sumSamples += seconds;
+                        runTimes[nextIndex++] = totalSeconds;
+                        sumSamples += totalSeconds;
                     }
 
                     if (nextIndex >= MAX_RUNTIME_SAMPLES) {
