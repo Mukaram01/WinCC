@@ -124,6 +124,35 @@ static int parse_ddmmyyyy(const char* s, int* dd, int* mo, int* yy)
     return (*dd>=1 && *dd<=31 && *mo>=1 && *mo<=12 && *yy>=1970);
 }
 
+static double elapsed_since_start_seconds(const char* startDate, const char* startTime)
+{
+    int dd=0, mo=0, yy=0, hh=0, mm=0;
+    struct tm t;
+    time_t start_epoch;
+    time_t now_epoch;
+
+    if (!parse_ddmmyyyy(startDate, &dd, &mo, &yy)) return -1.0;
+    if (!parse_hhmm(startTime, &hh, &mm)) return -1.0;
+
+    t.tm_sec  = 0;
+    t.tm_min  = mm;
+    t.tm_hour = hh;
+    t.tm_mday = dd;
+    t.tm_mon  = mo - 1;
+    t.tm_year = yy - 1900;
+    t.tm_wday = 0; t.tm_yday = 0; t.tm_isdst = -1;
+
+    start_epoch = mktime(&t);
+    if (start_epoch == (time_t)-1) return -1.0;
+
+    now_epoch = time(NULL);
+    if (now_epoch == (time_t)-1) return -1.0;
+
+    if (now_epoch < start_epoch) return -1.0;
+
+    return difftime(now_epoch, start_epoch);
+}
+
 /* compute planned end from THIS job's start date+time + ETA seconds */
 static void planned_from_start_and_eta(const char* startDate, const char* startTime,
                                        double etaSecs,
@@ -268,8 +297,8 @@ void MainProcess(
     int isNew;
     const double MAX_CYCLE_DELTA = 24.0 * 60.0 * 60.0;
 
-    /* Use numeric history for ETA (change to "ETAHistory" later if you create it) */
-    const char* ETA_ARCHIVE = "OperationDataArchive";
+    /* Use ProductionEvents history for ETA */
+    const char* ETA_ARCHIVE = "ProductionEvents";
 
     if (IsMasterServer() != 1) return;
 
@@ -338,6 +367,19 @@ void MainProcess(
                     char downHHMM[16];
                     char endDate[11];
                     char endTime[6];
+                    double elapsedSeconds = elapsed_since_start_seconds(sDatePrev, sTimePrev);
+
+                    /* If the live downtime tag under-reported, fall back to elapsed - runtime */
+                    if (elapsedSeconds >= 0.0) {
+                        double inferredDown = elapsedSeconds - mergedRuntimeSeconds;
+                        if (inferredDown > mergedDowntimeSeconds) {
+                            mergedDowntimeSeconds = inferredDown;
+                        }
+                    }
+
+                    if (mergedDowntimeSeconds < 0.0) {
+                        mergedDowntimeSeconds = 0.0;
+                    }
 
                     secs_to_HHMM(mergedRuntimeSeconds, runHHMM, sizeof(runHHMM));
                     secs_to_HHMM(mergedDowntimeSeconds, downHHMM, sizeof(downHHMM));
@@ -397,11 +439,11 @@ void MainProcess(
         set_tag_double_if_valid(previousCycleTag, prevCycle);
         set_tag_double_if_valid(totalRuntimeTag,  totalRt);
 
-        /* Keep % up to date, but don't rewrite end day/time during the job */
+        /* Keep % and planned end up to date throughout the job */
         CalculateProgress(startFormattedTimeTag, startFormattedDateTag, estDurationTag,
                           downTimeTag, percentageTag,
-                          "" /* skip planned-end time rewrite */,
-                          "" /* skip planned-end day rewrite */, runTimeTag);
+                          formattedTimeTag,
+                          formattedDayTag, runTimeTag);
     }
 
     /* HH:MM live displays */
