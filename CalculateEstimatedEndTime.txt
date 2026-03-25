@@ -4,6 +4,14 @@
 #define MIN_REQUIRED_SAMPLES 3
 #define DEFAULT_ETA_SECONDS  3600
 #define MAX_RUNTIME_SAMPLES  2048
+#define MAX_ROW_TOTAL_MINUTES  (16 * 60)
+#define PLANNED_WINDOW_MINUTES (8 * 60)
+#define WINDOW_TOLERANCE_MINUTES 60
+#define QUARANTINE_ARCHIVE_NAME "ProductionEvents_Quarantine"
+
+#define QUARANTINE_F_ROW_ID   1
+#define QUARANTINE_F_PAYLOAD  2
+#define QUARANTINE_F_REASON   3
 
 /* ProductionEvents field indices (1-based) */
 #define F_OPERATION      4
@@ -11,13 +19,22 @@
 #define F_RUNTIME_HHMM   6
 #define F_DOWNTIME_HHMM  7
 
-static int parseRuntimeSeconds(const char* runtime, double* seconds);
+static int parseRuntimeSeconds(const char* runtime,
+                               long rowId,
+                               const char* fieldName,
+                               double* seconds,
+                               char* normalizedHHMM,
+                               unsigned int normalizedSize,
+                               char* rejectReason,
+                               unsigned int rejectReasonSize);
 static void copyTrim(char* dest, unsigned int destSize, const char* src);
 static unsigned int textLength(const char* text);
 static int textCompare(const char* a, const char* b);
 static int isSpaceChar(char c);
 static const char* skipSpace(const char* text);
 static int parseNonNegativeLong(const char* text, const char** endOut, long* valueOut);
+static void minutesToHHMM(long totalMinutes, char* out, unsigned int outSize);
+static int quarantineRow(const char* quarantineArchiveName, long rowId, const char* payload, const char* reason);
 static void sortDoubles(double* values, int count);
 
 void CalculateEstimatedEndTime(const char* archiveName,
@@ -33,6 +50,7 @@ void CalculateEstimatedEndTime(const char* archiveName,
     double median = DEFAULT_ETA_SECONDS;
     int archiveOpened = 0;
     double sumSamples = 0.0;
+    long sourceRowId = 0;
 
     const char* operationNumberSrc = GetTagChar(operationTag);
     const char* partNumberSrc      = GetTagChar(partTag);
@@ -63,9 +81,17 @@ void CalculateEstimatedEndTime(const char* archiveName,
             char bufPart[64] = "";
             char bufRuntime[32] = "";
             char bufDowntime[32] = "";
+            char normalizedRuntime[16] = "";
+            char normalizedDowntime[16] = "";
+            char rejectReason[160] = "";
+            char sourcePayload[256] = "";
             double runtimeSeconds = 0.0;
             double downtimeSeconds = 0.0;
             double totalSeconds = 0.0;
+            int runtimeOk = 0;
+            int downtimeOk = 0;
+
+            ++sourceRowId;
 
             uaArchiveGetFieldValueString(hArchive, F_OPERATION, bufOp, sizeof(bufOp));
             uaArchiveGetFieldValueString(hArchive, F_PART,      bufPart, sizeof(bufPart));
@@ -74,11 +100,31 @@ void CalculateEstimatedEndTime(const char* archiveName,
                 uaArchiveGetFieldValueString(hArchive, F_RUNTIME_HHMM,  bufRuntime,  sizeof(bufRuntime));
                 uaArchiveGetFieldValueString(hArchive, F_DOWNTIME_HHMM, bufDowntime, sizeof(bufDowntime));
 
-                if (!parseRuntimeSeconds(bufRuntime, &runtimeSeconds)) {
-                    runtimeSeconds = 0.0;
-                }
-                if (!parseRuntimeSeconds(bufDowntime, &downtimeSeconds)) {
-                    downtimeSeconds = 0.0;
+                runtimeOk = parseRuntimeSeconds(bufRuntime,
+                                                sourceRowId,
+                                                "RuntimeHHMM",
+                                                &runtimeSeconds,
+                                                normalizedRuntime,
+                                                sizeof(normalizedRuntime),
+                                                rejectReason,
+                                                sizeof(rejectReason));
+                downtimeOk = parseRuntimeSeconds(bufDowntime,
+                                                 sourceRowId,
+                                                 "DowntimeHHMM",
+                                                 &downtimeSeconds,
+                                                 normalizedDowntime,
+                                                 sizeof(normalizedDowntime),
+                                                 rejectReason,
+                                                 sizeof(rejectReason));
+
+                if (!runtimeOk || !downtimeOk) {
+                    sprintf(sourcePayload,
+                            "rowId=%ld,operation=%s,part=%s,runtime=%s,downtime=%s,normRuntime=%s,normDowntime=%s",
+                            sourceRowId, bufOp, bufPart, bufRuntime, bufDowntime, normalizedRuntime, normalizedDowntime);
+                    quarantineRow(QUARANTINE_ARCHIVE_NAME, sourceRowId, sourcePayload, rejectReason);
+                    printf("CalculateEstimatedEndTime: quarantined rowId=%ld reason=%s payload=%s\n",
+                           sourceRowId, rejectReason, sourcePayload);
+                    continue;
                 }
 
                 totalSeconds = runtimeSeconds + downtimeSeconds;
@@ -142,14 +188,26 @@ static void sortDoubles(double* values, int count)
     }
 }
 
-static int parseRuntimeSeconds(const char* runtime, double* seconds)
+static int parseRuntimeSeconds(const char* runtime,
+                               long rowId,
+                               const char* fieldName,
+                               double* seconds,
+                               char* normalizedHHMM,
+                               unsigned int normalizedSize,
+                               char* rejectReason,
+                               unsigned int rejectReasonSize)
 {
     const char* p;
     const char* colon;
     long hours = 0;
     long minutes = 0;
+    long totalMinutes = 0;
+    long maxPlannedWithTolerance = PLANNED_WINDOW_MINUTES + WINDOW_TOLERANCE_MINUTES;
 
-    if (!runtime || !*runtime || !seconds) {
+    if (!runtime || !*runtime || !seconds || !fieldName || !rejectReason || rejectReasonSize == 0) {
+        if (rejectReason && rejectReasonSize > 0) {
+            sprintf(rejectReason, "rowId=%ld malformed-empty", rowId);
+        }
         return 0;
     }
 
@@ -160,30 +218,90 @@ static int parseRuntimeSeconds(const char* runtime, double* seconds)
     }
 
     if (*colon != ':') {
+        sprintf(rejectReason, "rowId=%ld malformed-no-colon field=%s value=%s", rowId, fieldName, runtime);
         return 0;
     }
 
     if (!parseNonNegativeLong(p, &colon, &hours)) {
+        sprintf(rejectReason, "rowId=%ld malformed-hour field=%s value=%s", rowId, fieldName, runtime);
         return 0;
     }
 
     colon = skipSpace(colon);
     if (*colon != ':') {
+        sprintf(rejectReason, "rowId=%ld malformed-hour-separator field=%s value=%s", rowId, fieldName, runtime);
         return 0;
     }
 
     p = skipSpace(colon + 1);
     if (!parseNonNegativeLong(p, &colon, &minutes)) {
+        sprintf(rejectReason, "rowId=%ld malformed-minute field=%s value=%s", rowId, fieldName, runtime);
         return 0;
     }
 
     colon = skipSpace(colon);
     if (*colon != '\0' || minutes < 0 || minutes >= 60 || hours < 0) {
+        sprintf(rejectReason, "rowId=%ld malformed-minute-range field=%s value=%s", rowId, fieldName, runtime);
         return 0;
     }
 
-    *seconds = (double)hours * 3600.0 + (double)minutes * 60.0;
+    totalMinutes = hours * 60 + minutes;
+    if (totalMinutes > MAX_ROW_TOTAL_MINUTES || totalMinutes > maxPlannedWithTolerance) {
+        sprintf(rejectReason,
+                "rowId=%ld threshold-exceeded field=%s totalMinutes=%ld maxPerRow=%d maxWindow=%ld",
+                rowId, fieldName, totalMinutes, MAX_ROW_TOTAL_MINUTES, maxPlannedWithTolerance);
+        return 0;
+    }
+
+    minutesToHHMM(totalMinutes, normalizedHHMM, normalizedSize);
+    *seconds = (double)totalMinutes * 60.0;
     return 1;
+}
+
+static void minutesToHHMM(long totalMinutes, char* out, unsigned int outSize)
+{
+    long hh;
+    long mm;
+    if (!out || outSize < 6 || totalMinutes < 0) {
+        return;
+    }
+
+    hh = totalMinutes / 60;
+    mm = totalMinutes % 60;
+    sprintf(out, "%02ld:%02ld", hh, mm);
+}
+
+static int quarantineRow(const char* quarantineArchiveName, long rowId, const char* payload, const char* reason)
+{
+    UAHCONNECT hCon = 0;
+    UAHARCHIVE hArc = 0;
+    int ok = 0;
+    char rowIdText[32] = "";
+
+    if (!quarantineArchiveName || !*quarantineArchiveName || !payload || !reason) {
+        return 0;
+    }
+
+    sprintf(rowIdText, "%ld", rowId);
+
+    if (!uaConnect(&hCon)) goto cleanup;
+    if (!uaQueryArchiveByName(hCon, quarantineArchiveName, &hArc)) goto cleanup;
+    if (!uaArchiveOpen(hArc)) goto cleanup;
+
+    uaArchiveSetFieldValueString(hArc, QUARANTINE_F_ROW_ID,  rowIdText);
+    uaArchiveSetFieldValueString(hArc, QUARANTINE_F_PAYLOAD, payload);
+    uaArchiveSetFieldValueString(hArc, QUARANTINE_F_REASON,  reason);
+    ok = uaArchiveInsert(hArc);
+
+cleanup:
+    if (hArc) {
+        uaArchiveClose(hArc);
+        uaReleaseArchive(hArc);
+    }
+    if (hCon) {
+        uaDisconnect(hCon);
+    }
+    return ok;
 }
 
 static int parseNonNegativeLong(const char* text, const char** endOut, long* valueOut)
