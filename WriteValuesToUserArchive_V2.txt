@@ -14,6 +14,7 @@
 */
 
 #include "apdefap.h"
+#include <string.h>
 
 /* --- field indices for ProductionEvents --- */
 #define F_MACHINE        1
@@ -31,6 +32,62 @@
 /* Safe fallback for NULL strings */
 static const char* nz(const char* s) { return s ? s : ""; }
 
+static int parse_hhmm_seconds(const char* text, double* secondsOut)
+{
+    int hh;
+    int mm;
+
+    if (!text || !secondsOut) return 0;
+    if (strlen(text) != 5 || text[2] != ':') return 0;
+    if (text[0] < '0' || text[0] > '9' ||
+        text[1] < '0' || text[1] > '9' ||
+        text[3] < '0' || text[3] > '9' ||
+        text[4] < '0' || text[4] > '9') {
+        return 0;
+    }
+
+    hh = (text[0] - '0') * 10 + (text[1] - '0');
+    mm = (text[3] - '0') * 10 + (text[4] - '0');
+    if (mm < 0 || mm > 59 || hh < 0) return 0;
+
+    *secondsOut = (double)hh * 3600.0 + (double)mm * 60.0;
+    return 1;
+}
+
+static void seconds_to_hhmm(double seconds, char out[6])
+{
+    long total;
+    long hh;
+    long mm;
+
+    if (!out) return;
+    if (seconds < 0.0) seconds = 0.0;
+
+    total = (long)(seconds + 0.5);
+    hh = total / 3600;
+    mm = (total % 3600) / 60;
+
+    sprintf(out, "%02ld:%02ld", hh, mm);
+}
+
+static int key_matches(const char* machineName,
+                       const char* orderNumber,
+                       const char* serialNumber,
+                       const char* operationNumber,
+                       const char* partNumber,
+                       const char* recMachine,
+                       const char* recOrder,
+                       const char* recSerial,
+                       const char* recOperation,
+                       const char* recPart)
+{
+    return strcmp(nz(machineName), nz(recMachine)) == 0 &&
+           strcmp(nz(orderNumber), nz(recOrder)) == 0 &&
+           strcmp(nz(serialNumber), nz(recSerial)) == 0 &&
+           strcmp(nz(operationNumber), nz(recOperation)) == 0 &&
+           strcmp(nz(partNumber), nz(recPart)) == 0;
+}
+
 void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvents" */
                                  const char* machineName,
                                  const char* orderNumber,
@@ -47,7 +104,26 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
     UAHCONNECT hCon = 0;
     UAHARCHIVE hArc = 0;
     int ok;
-    int insertOk = 0;
+    int writeOk = 0;
+    int archiveOpened = 0;
+    int hasExisting = 0;
+    int duplicateCount = 0;
+
+    char existingMachine[64];
+    char existingOrder[64];
+    char existingSerial[64];
+    char existingOperation[64];
+    char existingPart[64];
+    char existingRun[16];
+    char existingDown[16];
+    char existingStartDate[16];
+    char existingStartTime[16];
+    char mergedRun[6];
+    char mergedDown[6];
+    double oldRunSeconds = 0.0;
+    double oldDownSeconds = 0.0;
+    double newRunSeconds = 0.0;
+    double newDownSeconds = 0.0;
 
     if (!archiveName || archiveName[0] == '\0') {
         return;
@@ -63,26 +139,121 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
         /* Open, set fields, insert */
         ok = uaArchiveOpen(hArc);
         if (ok) {
-            uaArchiveSetFieldValueString(hArc, F_MACHINE,       nz(machineName));
-            uaArchiveSetFieldValueString(hArc, F_ORDER,         nz(orderNumber));
-            uaArchiveSetFieldValueString(hArc, F_SERIAL,        nz(serialNumber));
-            uaArchiveSetFieldValueString(hArc, F_OPERATION,     nz(operationNumber));
-            uaArchiveSetFieldValueString(hArc, F_PART,          nz(partNumber));
-            uaArchiveSetFieldValueString(hArc, F_RUNTIME_HHMM,  nz(runtimeHHMM));
-            uaArchiveSetFieldValueString(hArc, F_DOWNTIME_HHMM, nz(downtimeHHMM));
-            uaArchiveSetFieldValueString(hArc, F_START_DATE,    nz(startDate));
-            uaArchiveSetFieldValueString(hArc, F_START_TIME,    nz(startTime));
-            uaArchiveSetFieldValueString(hArc, F_END_DATE,      nz(plannedEndDate));
-            uaArchiveSetFieldValueString(hArc, F_END_TIME,      nz(plannedEndTime));
+            archiveOpened = 1;
 
-            insertOk = uaArchiveInsert(hArc);
-            if (!insertOk) {
+            /* Deterministic de-dupe key:
+               MachineName + OrderNumber + SerialNumber + OperationNumber + PartNumber */
+            if (uaArchiveMoveFirst(hArc)) {
+                do {
+                    existingMachine[0] = '\0';
+                    existingOrder[0] = '\0';
+                    existingSerial[0] = '\0';
+                    existingOperation[0] = '\0';
+                    existingPart[0] = '\0';
+
+                    uaArchiveGetFieldValueString(hArc, F_MACHINE,   existingMachine,   sizeof(existingMachine));
+                    uaArchiveGetFieldValueString(hArc, F_ORDER,     existingOrder,     sizeof(existingOrder));
+                    uaArchiveGetFieldValueString(hArc, F_SERIAL,    existingSerial,    sizeof(existingSerial));
+                    uaArchiveGetFieldValueString(hArc, F_OPERATION, existingOperation, sizeof(existingOperation));
+                    uaArchiveGetFieldValueString(hArc, F_PART,      existingPart,      sizeof(existingPart));
+
+                    if (key_matches(machineName, orderNumber, serialNumber, operationNumber, partNumber,
+                                    existingMachine, existingOrder, existingSerial, existingOperation, existingPart)) {
+                        hasExisting = 1;
+
+                        existingRun[0] = '\0';
+                        existingDown[0] = '\0';
+                        existingStartDate[0] = '\0';
+                        existingStartTime[0] = '\0';
+
+                        uaArchiveGetFieldValueString(hArc, F_RUNTIME_HHMM,  existingRun,       sizeof(existingRun));
+                        uaArchiveGetFieldValueString(hArc, F_DOWNTIME_HHMM, existingDown,      sizeof(existingDown));
+                        uaArchiveGetFieldValueString(hArc, F_START_DATE,    existingStartDate, sizeof(existingStartDate));
+                        uaArchiveGetFieldValueString(hArc, F_START_TIME,    existingStartTime, sizeof(existingStartTime));
+
+                        if (!parse_hhmm_seconds(existingRun, &oldRunSeconds)) oldRunSeconds = 0.0;
+                        if (!parse_hhmm_seconds(existingDown, &oldDownSeconds)) oldDownSeconds = 0.0;
+                        if (!parse_hhmm_seconds(nz(runtimeHHMM), &newRunSeconds)) newRunSeconds = 0.0;
+                        if (!parse_hhmm_seconds(nz(downtimeHHMM), &newDownSeconds)) newDownSeconds = 0.0;
+
+                        seconds_to_hhmm(oldRunSeconds + newRunSeconds, mergedRun);
+                        seconds_to_hhmm(oldDownSeconds + newDownSeconds, mergedDown);
+
+                        uaArchiveSetFieldValueString(hArc, F_MACHINE,       nz(machineName));
+                        uaArchiveSetFieldValueString(hArc, F_ORDER,         nz(orderNumber));
+                        uaArchiveSetFieldValueString(hArc, F_SERIAL,        nz(serialNumber));
+                        uaArchiveSetFieldValueString(hArc, F_OPERATION,     nz(operationNumber));
+                        uaArchiveSetFieldValueString(hArc, F_PART,          nz(partNumber));
+                        uaArchiveSetFieldValueString(hArc, F_RUNTIME_HHMM,  mergedRun);
+                        uaArchiveSetFieldValueString(hArc, F_DOWNTIME_HHMM, mergedDown);
+                        /* Keep first value start date/time from existing row */
+                        uaArchiveSetFieldValueString(hArc, F_START_DATE,    nz(existingStartDate[0] ? existingStartDate : startDate));
+                        uaArchiveSetFieldValueString(hArc, F_START_TIME,    nz(existingStartTime[0] ? existingStartTime : startTime));
+                        /* Keep second value planned end date/time from incoming row */
+                        uaArchiveSetFieldValueString(hArc, F_END_DATE,      nz(plannedEndDate));
+                        uaArchiveSetFieldValueString(hArc, F_END_TIME,      nz(plannedEndTime));
+
+                        writeOk = uaArchiveUpdate(hArc);
+                        break;
+                    }
+                } while (uaArchiveMoveNext(hArc));
+            }
+
+            if (!hasExisting) {
+                uaArchiveSetFieldValueString(hArc, F_MACHINE,       nz(machineName));
+                uaArchiveSetFieldValueString(hArc, F_ORDER,         nz(orderNumber));
+                uaArchiveSetFieldValueString(hArc, F_SERIAL,        nz(serialNumber));
+                uaArchiveSetFieldValueString(hArc, F_OPERATION,     nz(operationNumber));
+                uaArchiveSetFieldValueString(hArc, F_PART,          nz(partNumber));
+                uaArchiveSetFieldValueString(hArc, F_RUNTIME_HHMM,  nz(runtimeHHMM));
+                uaArchiveSetFieldValueString(hArc, F_DOWNTIME_HHMM, nz(downtimeHHMM));
+                uaArchiveSetFieldValueString(hArc, F_START_DATE,    nz(startDate));
+                uaArchiveSetFieldValueString(hArc, F_START_TIME,    nz(startTime));
+                uaArchiveSetFieldValueString(hArc, F_END_DATE,      nz(plannedEndDate));
+                uaArchiveSetFieldValueString(hArc, F_END_TIME,      nz(plannedEndTime));
+
+                writeOk = uaArchiveInsert(hArc);
+            }
+
+            if (!writeOk) {
                 SetTagWord("ArchiveInsertFailed", 1);
             }
+
+            /* Post-load duplicate check query: fail batch when duplicates exist */
+            if (uaArchiveMoveFirst(hArc)) {
+                do {
+                    char chkMachine[64] = "";
+                    char chkOrder[64] = "";
+                    char chkSerial[64] = "";
+                    char chkOperation[64] = "";
+                    char chkPart[64] = "";
+
+                    uaArchiveGetFieldValueString(hArc, F_MACHINE,   chkMachine,   sizeof(chkMachine));
+                    uaArchiveGetFieldValueString(hArc, F_ORDER,     chkOrder,     sizeof(chkOrder));
+                    uaArchiveGetFieldValueString(hArc, F_SERIAL,    chkSerial,    sizeof(chkSerial));
+                    uaArchiveGetFieldValueString(hArc, F_OPERATION, chkOperation, sizeof(chkOperation));
+                    uaArchiveGetFieldValueString(hArc, F_PART,      chkPart,      sizeof(chkPart));
+
+                    if (key_matches(machineName, orderNumber, serialNumber, operationNumber, partNumber,
+                                    chkMachine, chkOrder, chkSerial, chkOperation, chkPart)) {
+                        ++duplicateCount;
+                    }
+                } while (uaArchiveMoveNext(hArc));
+            }
+
+            if (duplicateCount > 1) {
+                SetTagWord("ArchiveDuplicateCheckFailed", 1);
+                SetTagWord("ArchiveInsertFailed", 1);
+            }
+
             uaArchiveClose(hArc);
+            archiveOpened = 0;
         }
         uaReleaseArchive(hArc);
     }
 
+    if (hArc && archiveOpened) {
+        uaArchiveClose(hArc);
+    }
     uaDisconnect(hCon);
 }
