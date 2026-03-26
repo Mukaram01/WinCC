@@ -5,13 +5,9 @@
 #define PLANNED_WINDOW_MINUTES     (8 * 60)
 #define WINDOW_TOLERANCE_MINUTES   60
 
-int GetMaxRuntimeHHMMMinutes(void)
-{
-    int maxRuntimeWindowMinutes = PLANNED_WINDOW_MINUTES + WINDOW_TOLERANCE_MINUTES;
-    return (MAX_ROW_TOTAL_MINUTES < maxRuntimeWindowMinutes) ? MAX_ROW_TOTAL_MINUTES : maxRuntimeWindowMinutes;
-}
-
 double GetMaxRuntimeHHMMSeconds(void)
 {
-    return (double)GetMaxRuntimeHHMMMinutes() * 60.0;
+    int maxRuntimeWindowMinutes = PLANNED_WINDOW_MINUTES + WINDOW_TOLERANCE_MINUTES;
+    int maxRuntimeHHMMMinutes = (MAX_ROW_TOTAL_MINUTES < maxRuntimeWindowMinutes) ? MAX_ROW_TOTAL_MINUTES : maxRuntimeWindowMinutes;
+    return (double)maxRuntimeHHMMMinutes * 60.0;
 }
