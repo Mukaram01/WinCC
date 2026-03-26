@@ -122,7 +122,10 @@ void CalculateEstimatedEndTime(const char* archiveName,
                             "rowId=%ld,operation=%s,part=%s,runtime=%s,downtime=%s,normRuntime=%s,normDowntime=%s",
                             sourceRowId, bufOp, bufPart, bufRuntime, bufDowntime, normalizedRuntime, normalizedDowntime);
                     quarantineRow(QUARANTINE_ARCHIVE_NAME, sourceRowId, sourcePayload, rejectReason);
-                    printf("CalculateEstimatedEndTime: quarantined rowId=%ld reason=%s payload=%s\n",
+                    printf("CalculateEstimatedEndTime: quarantined\n"
+                           "  rowId   : %ld\n"
+                           "  reason  : %s\n"
+                           "  payload : %s\n",
                            sourceRowId, rejectReason, sourcePayload);
                     continue;
                 }
