@@ -56,6 +56,7 @@ void   GetTagValues(const char* orderTag, const char* serialTag,
                     char* operationValue, char* partValue);
 int    CompareIdentifiers(const char* curOrder, const char* curSerial, const char* curOp, const char* curPart,
                           const char* prevOrder, const char* prevSerial, const char* prevOp, const char* prevPart);
+double GetMaxRuntimeHHMMSeconds(void);
 
 /* Writer for ProductionEvents with DowntimeHHMM at field #7 */
 void   WriteValuesToUserArchive_V2(const char* archiveName,   /* "ProductionEvents" */
@@ -368,6 +369,7 @@ void MainProcess(
                     char endDate[11];
                     char endTime[6];
                     double elapsedSeconds = elapsed_since_start_seconds(sDatePrev, sTimePrev);
+                    double maxRuntimeHHMMSeconds = GetMaxRuntimeHHMMSeconds();
 
                     /* If the live downtime tag under-reported, fall back to elapsed - runtime */
                     if (elapsedSeconds >= 0.0) {
@@ -379,6 +381,11 @@ void MainProcess(
 
                     if (mergedDowntimeSeconds < 0.0) {
                         mergedDowntimeSeconds = 0.0;
+                    }
+                    if (mergedDowntimeSeconds > maxRuntimeHHMMSeconds) {
+                        printf("MainProcess: clamped downtime from %.2f to %.2f seconds to satisfy HH:MM parser limit\n",
+                               mergedDowntimeSeconds, maxRuntimeHHMMSeconds);
+                        mergedDowntimeSeconds = maxRuntimeHHMMSeconds;
                     }
 
                     secs_to_HHMM(mergedRuntimeSeconds, runHHMM, sizeof(runHHMM));

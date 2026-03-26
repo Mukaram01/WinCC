@@ -1,0 +1,13 @@
+/* RuntimeBounds.c — centralized HH:MM bounds used by writer and ETA parser */
+#include "apdefap.h"
+
+#define MAX_ROW_TOTAL_MINUTES      (16 * 60)
+#define PLANNED_WINDOW_MINUTES     (8 * 60)
+#define WINDOW_TOLERANCE_MINUTES   60
+
+double GetMaxRuntimeHHMMSeconds(void)
+{
+    int maxRuntimeWindowMinutes = PLANNED_WINDOW_MINUTES + WINDOW_TOLERANCE_MINUTES;
+    int maxRuntimeHHMMMinutes = (MAX_ROW_TOTAL_MINUTES < maxRuntimeWindowMinutes) ? MAX_ROW_TOTAL_MINUTES : maxRuntimeWindowMinutes;
+    return (double)maxRuntimeHHMMMinutes * 60.0;
+}
