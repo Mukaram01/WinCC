@@ -4,9 +4,6 @@
 #define MIN_REQUIRED_SAMPLES 3
 #define DEFAULT_ETA_SECONDS  3600
 #define MAX_RUNTIME_SAMPLES  2048
-#define MAX_ROW_TOTAL_MINUTES  (16 * 60)
-#define PLANNED_WINDOW_MINUTES (8 * 60)
-#define WINDOW_TOLERANCE_MINUTES 60
 #define QUARANTINE_ARCHIVE_NAME "ProductionEvents_Quarantine"
 
 #define QUARANTINE_F_ROW_ID   1
@@ -27,6 +24,7 @@ static int parseRuntimeSeconds(const char* runtime,
                                unsigned int normalizedSize,
                                char* rejectReason,
                                unsigned int rejectReasonSize);
+int GetMaxRuntimeHHMMMinutes(void);
 static void copyTrim(char* dest, unsigned int destSize, const char* src);
 static unsigned int textLength(const char* text);
 static int textCompare(const char* a, const char* b);
@@ -202,7 +200,7 @@ static int parseRuntimeSeconds(const char* runtime,
     long hours = 0;
     long minutes = 0;
     long totalMinutes = 0;
-    long maxPlannedWithTolerance = PLANNED_WINDOW_MINUTES + WINDOW_TOLERANCE_MINUTES;
+    int maxRuntimeHHMMMinutes = GetMaxRuntimeHHMMMinutes();
 
     if (!runtime || !*runtime || !seconds || !fieldName || !rejectReason || rejectReasonSize == 0) {
         if (rejectReason && rejectReasonSize > 0) {
@@ -246,10 +244,10 @@ static int parseRuntimeSeconds(const char* runtime,
     }
 
     totalMinutes = hours * 60 + minutes;
-    if (totalMinutes > MAX_ROW_TOTAL_MINUTES || totalMinutes > maxPlannedWithTolerance) {
+    if (totalMinutes > maxRuntimeHHMMMinutes) {
         sprintf(rejectReason,
-                "rowId=%ld threshold-exceeded field=%s totalMinutes=%ld maxPerRow=%d maxWindow=%ld",
-                rowId, fieldName, totalMinutes, MAX_ROW_TOTAL_MINUTES, maxPlannedWithTolerance);
+                "rowId=%ld threshold-exceeded field=%s totalMinutes=%ld maxHHMM=%d",
+                rowId, fieldName, totalMinutes, maxRuntimeHHMMMinutes);
         return 0;
     }
 
