@@ -452,4 +452,3 @@ void MainProcess(
     UpdateFormattedTime(runTimeTag,  runFormattedTimeTag);
     UpdateFormattedTime(downTimeTag, downFormattedTimeTag);
 }
-}
