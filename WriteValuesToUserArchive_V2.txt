@@ -34,27 +34,36 @@ static const char* nz(const char* s) { return s ? s : ""; }
 
 static int parse_hhmm_seconds(const char* text, double* secondsOut)
 {
-    int hh;
-    int mm;
+    const char* p;
+    long hh = 0;
+    int  mm  = 0;
+    int  digits = 0;
 
     if (!text || !secondsOut) return 0;
-    if (strlen(text) != 5 || text[2] != ':') return 0;
-    if (text[0] < '0' || text[0] > '9' ||
-        text[1] < '0' || text[1] > '9' ||
-        text[3] < '0' || text[3] > '9' ||
-        text[4] < '0' || text[4] > '9') {
-        return 0;
-    }
 
-    hh = (text[0] - '0') * 10 + (text[1] - '0');
-    mm = (text[3] - '0') * 10 + (text[4] - '0');
+    p = text;
+    /* Parse hours: one or more digits */
+    while (*p >= '0' && *p <= '9') {
+        hh = hh * 10 + (*p - '0');
+        ++p;
+        ++digits;
+    }
+    if (digits == 0 || *p != ':') return 0;
+    ++p; /* skip ':' */
+
+    /* Parse minutes: exactly two digits */
+    if (p[0] < '0' || p[0] > '9' || p[1] < '0' || p[1] > '9') return 0;
+    mm = (p[0] - '0') * 10 + (p[1] - '0');
+    p += 2;
+    if (*p != '\0') return 0; /* reject trailing garbage */
+
     if (mm < 0 || mm > 59 || hh < 0) return 0;
 
     *secondsOut = (double)hh * 3600.0 + (double)mm * 60.0;
     return 1;
 }
 
-static void seconds_to_hhmm(double seconds, char out[6])
+static void seconds_to_hhmm(double seconds, char out[16])
 {
     long total;
     long hh;
@@ -75,17 +84,20 @@ static int key_matches(const char* machineName,
                        const char* serialNumber,
                        const char* operationNumber,
                        const char* partNumber,
+                       const char* startDate,
                        const char* recMachine,
                        const char* recOrder,
                        const char* recSerial,
                        const char* recOperation,
-                       const char* recPart)
+                       const char* recPart,
+                       const char* recStartDate)
 {
-    return strcmp(nz(machineName), nz(recMachine)) == 0 &&
-           strcmp(nz(orderNumber), nz(recOrder)) == 0 &&
-           strcmp(nz(serialNumber), nz(recSerial)) == 0 &&
-           strcmp(nz(operationNumber), nz(recOperation)) == 0 &&
-           strcmp(nz(partNumber), nz(recPart)) == 0;
+    return strcmp(nz(machineName),    nz(recMachine))    == 0 &&
+           strcmp(nz(orderNumber),    nz(recOrder))      == 0 &&
+           strcmp(nz(serialNumber),   nz(recSerial))     == 0 &&
+           strcmp(nz(operationNumber),nz(recOperation))  == 0 &&
+           strcmp(nz(partNumber),     nz(recPart))       == 0 &&
+           strcmp(nz(startDate),      nz(recStartDate))  == 0;
 }
 
 void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvents" */
@@ -118,8 +130,8 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
     char existingDown[16];
     char existingStartDate[16];
     char existingStartTime[16];
-    char mergedRun[6];
-    char mergedDown[6];
+    char mergedRun[16];
+    char mergedDown[16];
     double oldRunSeconds = 0.0;
     double oldDownSeconds = 0.0;
     double newRunSeconds = 0.0;
@@ -142,33 +154,35 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
             archiveOpened = 1;
 
             /* Deterministic de-dupe key:
-               MachineName + OrderNumber + SerialNumber + OperationNumber + PartNumber */
+               MachineName + OrderNumber + SerialNumber + OperationNumber + PartNumber + StartDate
+               StartDate is included so that the same job on a different production day
+               always creates a new row rather than updating a historical entry. */
             if (uaArchiveMoveFirst(hArc)) {
                 do {
-                    existingMachine[0] = '\0';
-                    existingOrder[0] = '\0';
-                    existingSerial[0] = '\0';
+                    existingMachine[0]   = '\0';
+                    existingOrder[0]     = '\0';
+                    existingSerial[0]    = '\0';
                     existingOperation[0] = '\0';
-                    existingPart[0] = '\0';
+                    existingPart[0]      = '\0';
+                    existingStartDate[0] = '\0';
 
-                    uaArchiveGetFieldValueString(hArc, F_MACHINE,   existingMachine,   sizeof(existingMachine));
-                    uaArchiveGetFieldValueString(hArc, F_ORDER,     existingOrder,     sizeof(existingOrder));
-                    uaArchiveGetFieldValueString(hArc, F_SERIAL,    existingSerial,    sizeof(existingSerial));
-                    uaArchiveGetFieldValueString(hArc, F_OPERATION, existingOperation, sizeof(existingOperation));
-                    uaArchiveGetFieldValueString(hArc, F_PART,      existingPart,      sizeof(existingPart));
+                    uaArchiveGetFieldValueString(hArc, F_MACHINE,    existingMachine,    sizeof(existingMachine));
+                    uaArchiveGetFieldValueString(hArc, F_ORDER,      existingOrder,      sizeof(existingOrder));
+                    uaArchiveGetFieldValueString(hArc, F_SERIAL,     existingSerial,     sizeof(existingSerial));
+                    uaArchiveGetFieldValueString(hArc, F_OPERATION,  existingOperation,  sizeof(existingOperation));
+                    uaArchiveGetFieldValueString(hArc, F_PART,       existingPart,       sizeof(existingPart));
+                    uaArchiveGetFieldValueString(hArc, F_START_DATE, existingStartDate,  sizeof(existingStartDate));
 
-                    if (key_matches(machineName, orderNumber, serialNumber, operationNumber, partNumber,
-                                    existingMachine, existingOrder, existingSerial, existingOperation, existingPart)) {
+                    if (key_matches(machineName, orderNumber, serialNumber, operationNumber, partNumber, startDate,
+                                    existingMachine, existingOrder, existingSerial, existingOperation, existingPart, existingStartDate)) {
                         hasExisting = 1;
 
-                        existingRun[0] = '\0';
-                        existingDown[0] = '\0';
-                        existingStartDate[0] = '\0';
+                        existingRun[0]       = '\0';
+                        existingDown[0]      = '\0';
                         existingStartTime[0] = '\0';
 
                         uaArchiveGetFieldValueString(hArc, F_RUNTIME_HHMM,  existingRun,       sizeof(existingRun));
                         uaArchiveGetFieldValueString(hArc, F_DOWNTIME_HHMM, existingDown,      sizeof(existingDown));
-                        uaArchiveGetFieldValueString(hArc, F_START_DATE,    existingStartDate, sizeof(existingStartDate));
                         uaArchiveGetFieldValueString(hArc, F_START_TIME,    existingStartTime, sizeof(existingStartTime));
 
                         if (!parse_hhmm_seconds(existingRun, &oldRunSeconds)) oldRunSeconds = 0.0;
@@ -222,20 +236,22 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
             /* Post-load duplicate check query: fail batch when duplicates exist */
             if (uaArchiveMoveFirst(hArc)) {
                 do {
-                    char chkMachine[64] = "";
-                    char chkOrder[64] = "";
-                    char chkSerial[64] = "";
+                    char chkMachine[64]   = "";
+                    char chkOrder[64]     = "";
+                    char chkSerial[64]    = "";
                     char chkOperation[64] = "";
-                    char chkPart[64] = "";
+                    char chkPart[64]      = "";
+                    char chkStartDate[16] = "";
 
-                    uaArchiveGetFieldValueString(hArc, F_MACHINE,   chkMachine,   sizeof(chkMachine));
-                    uaArchiveGetFieldValueString(hArc, F_ORDER,     chkOrder,     sizeof(chkOrder));
-                    uaArchiveGetFieldValueString(hArc, F_SERIAL,    chkSerial,    sizeof(chkSerial));
-                    uaArchiveGetFieldValueString(hArc, F_OPERATION, chkOperation, sizeof(chkOperation));
-                    uaArchiveGetFieldValueString(hArc, F_PART,      chkPart,      sizeof(chkPart));
+                    uaArchiveGetFieldValueString(hArc, F_MACHINE,    chkMachine,    sizeof(chkMachine));
+                    uaArchiveGetFieldValueString(hArc, F_ORDER,      chkOrder,      sizeof(chkOrder));
+                    uaArchiveGetFieldValueString(hArc, F_SERIAL,     chkSerial,     sizeof(chkSerial));
+                    uaArchiveGetFieldValueString(hArc, F_OPERATION,  chkOperation,  sizeof(chkOperation));
+                    uaArchiveGetFieldValueString(hArc, F_PART,       chkPart,       sizeof(chkPart));
+                    uaArchiveGetFieldValueString(hArc, F_START_DATE, chkStartDate,  sizeof(chkStartDate));
 
-                    if (key_matches(machineName, orderNumber, serialNumber, operationNumber, partNumber,
-                                    chkMachine, chkOrder, chkSerial, chkOperation, chkPart)) {
+                    if (key_matches(machineName, orderNumber, serialNumber, operationNumber, partNumber, startDate,
+                                    chkMachine, chkOrder, chkSerial, chkOperation, chkPart, chkStartDate)) {
                         ++duplicateCount;
                     }
                 } while (uaArchiveMoveNext(hArc));
