@@ -14,7 +14,6 @@
 */
 
 #include "apdefap.h"
-#include <string.h>
 
 /* --- field indices for ProductionEvents --- */
 #define F_MACHINE        1
