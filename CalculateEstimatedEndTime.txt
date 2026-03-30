@@ -81,8 +81,8 @@ void CalculateEstimatedEndTime(const char* archiveName,
             char bufDowntime[32] = "";
             char normalizedRuntime[16] = "";
             char normalizedDowntime[16] = "";
-            char rejectReason[160] = "";
-            char sourcePayload[256] = "";
+            char rejectReason[256] = "";
+            char sourcePayload[512] = "";
             double runtimeSeconds = 0.0;
             double downtimeSeconds = 0.0;
             double totalSeconds = 0.0;
