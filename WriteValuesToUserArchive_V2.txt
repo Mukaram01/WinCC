@@ -75,7 +75,7 @@ static void seconds_to_hhmm(double seconds, char out[16])
     hh = total / 3600;
     mm = (total % 3600) / 60;
 
-    sprintf(out, "%02ld:%02ld", hh, mm);
+    snprintf(out, 16, "%02ld:%02ld", hh, mm);
 }
 
 static int key_matches(const char* machineName,

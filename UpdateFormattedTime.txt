@@ -9,6 +9,8 @@ void UpdateFormattedTime(const char* sourceTag, const char* targetTag)
     int mins;
     char buf[16];
 
+    if (!sourceTag || sourceTag[0] == '\0' || !targetTag || targetTag[0] == '\0') return;
+
     secs = GetTagDouble(sourceTag);
     if (secs < 0.0) secs = 0.0;
 
@@ -17,6 +19,6 @@ void UpdateFormattedTime(const char* sourceTag, const char* targetTag)
     hrs   = (total / 3600) % 24;
     mins  = (total % 3600) / 60;
 
-    sprintf(buf, "%02d:%02d", hrs, mins);
+    snprintf(buf, sizeof(buf), "%02d:%02d", hrs, mins);
     SetTagChar(targetTag, buf);
 }
