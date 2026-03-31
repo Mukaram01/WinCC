@@ -9,6 +9,8 @@ void UpdateFormattedTime(const char* sourceTag, const char* targetTag)
     int mins;
     char buf[16];
 
+    if (!sourceTag || sourceTag[0] == '\0' || !targetTag || targetTag[0] == '\0') return;
+
     secs = GetTagDouble(sourceTag);
     if (secs < 0.0) secs = 0.0;
 

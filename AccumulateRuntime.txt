@@ -11,7 +11,7 @@ double AccumulateRuntime(double currentCycleTime, double* previousCycleTime, dou
     prev = *previousCycleTime;
     if (prev < 0.0) prev = 0.0;  /* treat invalid negative baselines as zero */
 
-    if ( (currentCycleTime - currentCycleTime) != 0.0 || (prev - prev) != 0.0 )
+    if ( (currentCycleTime != currentCycleTime) || (prev != prev) )
     {
         delta = 0.0;  /* non-finite sample, ignore */
     }

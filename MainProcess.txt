@@ -188,6 +188,7 @@ static void planned_from_start_and_eta(const char* startDate, const char* startT
     pe = localtime(&end_epoch);
     if (!pe) return;
 
+    /* outDate[11]: "DD/MM/YYYY" = 10 chars + null; outTime[6]: "HH:MM" = 5 chars + null */
     sprintf(outDate, "%02d/%02d/%04d", pe->tm_mday, pe->tm_mon + 1, pe->tm_year + 1900);
         sprintf(outTime, "%02d:%02d",      pe->tm_hour,  pe->tm_min);
 }
