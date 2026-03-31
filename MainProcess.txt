@@ -76,17 +76,17 @@ void   WriteValuesToUserArchive_V2(const char* archiveName,   /* "ProductionEven
 /* ---------- Local helpers (C89-safe) ---------- */
 static void secs_to_HHMM(double secs, char* out, size_t outSize)
 {
-    int total;
-    int h;
-    int m;
+    long total;
+    long h;
+    long m;
     if (!out || outSize == 0) return;
     if (outSize < 6) { out[0] = '\0'; return; }
     if (secs < 0.0) secs = 0.0;
-    total = (int)secs;
+    total = (long)secs;
     h = total / 3600;
     m = (total % 3600) / 60;
     out[0] = '\0';
-    sprintf(out, "%02d:%02d", h, m);
+    sprintf(out, "%02ld:%02ld", h, m);
 }
 
 static void set_tag_char_if_valid(const char* tag, const char* value)

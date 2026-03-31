@@ -19,6 +19,7 @@
 static int parseRuntimeSeconds(const char* runtime,
                                long rowId,
                                const char* fieldName,
+                               long maxMinutes,
                                double* seconds,
                                char* normalizedHHMM,
                                unsigned int normalizedSize,
@@ -101,6 +102,7 @@ void CalculateEstimatedEndTime(const char* archiveName,
                 runtimeOk = parseRuntimeSeconds(bufRuntime,
                                                 sourceRowId,
                                                 "RuntimeHHMM",
+                                                (long)(GetMaxRuntimeHHMMSeconds() / 60.0),
                                                 &runtimeSeconds,
                                                 normalizedRuntime,
                                                 sizeof(normalizedRuntime),
@@ -109,6 +111,7 @@ void CalculateEstimatedEndTime(const char* archiveName,
                 downtimeOk = parseRuntimeSeconds(bufDowntime,
                                                  sourceRowId,
                                                  "DowntimeHHMM",
+                                                 -1L,
                                                  &downtimeSeconds,
                                                  normalizedDowntime,
                                                  sizeof(normalizedDowntime),
@@ -192,6 +195,7 @@ static void sortDoubles(double* values, int count)
 static int parseRuntimeSeconds(const char* runtime,
                                long rowId,
                                const char* fieldName,
+                               long maxMinutes,
                                double* seconds,
                                char* normalizedHHMM,
                                unsigned int normalizedSize,
@@ -203,7 +207,6 @@ static int parseRuntimeSeconds(const char* runtime,
     long hours = 0;
     long minutes = 0;
     long totalMinutes = 0;
-    long maxRuntimeHHMMMinutes = (long)(GetMaxRuntimeHHMMSeconds() / 60.0);
 
     if (!runtime || !*runtime || !seconds || !fieldName || !rejectReason || rejectReasonSize == 0) {
         if (rejectReason && rejectReasonSize > 0) {
@@ -247,10 +250,10 @@ static int parseRuntimeSeconds(const char* runtime,
     }
 
     totalMinutes = hours * 60 + minutes;
-    if (totalMinutes > maxRuntimeHHMMMinutes) {
+    if (maxMinutes > 0 && totalMinutes > maxMinutes) {
         sprintf(rejectReason,
-                "rowId=%ld threshold-exceeded field=%s totalMinutes=%ld maxHHMM=%d",
-                rowId, fieldName, totalMinutes, maxRuntimeHHMMMinutes);
+                "rowId=%ld threshold-exceeded field=%s totalMinutes=%ld maxHHMM=%ld",
+                rowId, fieldName, totalMinutes, maxMinutes);
         return 0;
     }
 
