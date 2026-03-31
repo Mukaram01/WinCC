@@ -119,9 +119,9 @@ void CalculateEstimatedEndTime(const char* archiveName,
                                                  sizeof(rejectReason));
 
                 if (!runtimeOk || !downtimeOk) {
-                    snprintf(sourcePayload, sizeof(sourcePayload),
-                             "rowId=%ld,operation=%s,part=%s,runtime=%s,downtime=%s,normRuntime=%s,normDowntime=%s",
-                             sourceRowId, bufOp, bufPart, bufRuntime, bufDowntime, normalizedRuntime, normalizedDowntime);
+                    sprintf(sourcePayload,
+                            "rowId=%ld,operation=%s,part=%s,runtime=%s,downtime=%s,normRuntime=%s,normDowntime=%s",
+                            sourceRowId, bufOp, bufPart, bufRuntime, bufDowntime, normalizedRuntime, normalizedDowntime);
                     quarantineRow(QUARANTINE_ARCHIVE_NAME, sourceRowId, sourcePayload, rejectReason);
                     printf("CalculateEstimatedEndTime: quarantined\n"
                            "  rowId   : %ld\n"
@@ -210,7 +210,7 @@ static int parseRuntimeSeconds(const char* runtime,
 
     if (!runtime || !*runtime || !seconds || !fieldName || !rejectReason || rejectReasonSize == 0) {
         if (rejectReason && rejectReasonSize > 0) {
-            snprintf(rejectReason, rejectReasonSize, "rowId=%ld malformed-empty", rowId);
+            sprintf(rejectReason, "rowId=%ld malformed-empty", rowId);
         }
         return 0;
     }
@@ -222,38 +222,38 @@ static int parseRuntimeSeconds(const char* runtime,
     }
 
     if (*colon != ':') {
-        snprintf(rejectReason, rejectReasonSize, "rowId=%ld malformed-no-colon field=%s value=%s", rowId, fieldName, runtime);
+        sprintf(rejectReason, "rowId=%ld malformed-no-colon field=%s value=%s", rowId, fieldName, runtime);
         return 0;
     }
 
     if (!parseNonNegativeLong(p, &colon, &hours)) {
-        snprintf(rejectReason, rejectReasonSize, "rowId=%ld malformed-hour field=%s value=%s", rowId, fieldName, runtime);
+        sprintf(rejectReason, "rowId=%ld malformed-hour field=%s value=%s", rowId, fieldName, runtime);
         return 0;
     }
 
     colon = skipSpace(colon);
     if (*colon != ':') {
-        snprintf(rejectReason, rejectReasonSize, "rowId=%ld malformed-hour-separator field=%s value=%s", rowId, fieldName, runtime);
+        sprintf(rejectReason, "rowId=%ld malformed-hour-separator field=%s value=%s", rowId, fieldName, runtime);
         return 0;
     }
 
     p = skipSpace(colon + 1);
     if (!parseNonNegativeLong(p, &colon, &minutes)) {
-        snprintf(rejectReason, rejectReasonSize, "rowId=%ld malformed-minute field=%s value=%s", rowId, fieldName, runtime);
+        sprintf(rejectReason, "rowId=%ld malformed-minute field=%s value=%s", rowId, fieldName, runtime);
         return 0;
     }
 
     colon = skipSpace(colon);
     if (*colon != '\0' || minutes < 0 || minutes >= 60 || hours < 0) {
-        snprintf(rejectReason, rejectReasonSize, "rowId=%ld malformed-minute-range field=%s value=%s", rowId, fieldName, runtime);
+        sprintf(rejectReason, "rowId=%ld malformed-minute-range field=%s value=%s", rowId, fieldName, runtime);
         return 0;
     }
 
     totalMinutes = hours * 60 + minutes;
     if (maxMinutes > 0 && totalMinutes > maxMinutes) {
-        snprintf(rejectReason, rejectReasonSize,
-                 "rowId=%ld threshold-exceeded field=%s totalMinutes=%ld maxHHMM=%ld",
-                 rowId, fieldName, totalMinutes, maxMinutes);
+        sprintf(rejectReason,
+                "rowId=%ld threshold-exceeded field=%s totalMinutes=%ld maxHHMM=%ld",
+                rowId, fieldName, totalMinutes, maxMinutes);
         return 0;
     }
 
@@ -272,7 +272,7 @@ static void minutesToHHMM(long totalMinutes, char* out, unsigned int outSize)
 
     hh = totalMinutes / 60;
     mm = totalMinutes % 60;
-    snprintf(out, outSize, "%02ld:%02ld", hh, mm);
+    sprintf(out, "%02ld:%02ld", hh, mm);
 }
 
 static int quarantineRow(const char* quarantineArchiveName, long rowId, const char* payload, const char* reason)
@@ -286,7 +286,7 @@ static int quarantineRow(const char* quarantineArchiveName, long rowId, const ch
         return 0;
     }
 
-    snprintf(rowIdText, sizeof(rowIdText), "%ld", rowId);
+    sprintf(rowIdText, "%ld", rowId);
 
     if (!uaConnect(&hCon)) goto cleanup;
     if (!uaQueryArchiveByName(hCon, quarantineArchiveName, &hArc)) goto cleanup;
