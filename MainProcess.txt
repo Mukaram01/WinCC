@@ -333,12 +333,19 @@ void MainProcess(
         /* ----- Flush previous job row (clean snapshot) ----- */
         if (prevOp[0] || prevPart[0]) {
             double lastRtSeconds = GetTagDouble(totalRuntimeTag);
-            const char* sDatePrev = GetTagChar(startFormattedDateTag);
-            const char* sTimePrev = GetTagChar(startFormattedTimeTag);
+            char sDatePrev[16] = "";
+            char sTimePrev[16] = "";
             double etaSecsPrev = GetTagDouble(estDurationTag);
 
             double downSecsPrev = GetTagDouble(downTimeTag);
             int    matchesLast = matches_last_archived(prevOrder, prevSerial, prevOp, prevPart);
+
+            /* GetTagChar returns a pointer to a shared WinCC buffer reused on each call.*/
+            /*Copy both strings before any subsequent call can overwrite the buffer. */
+            s = GetTagChar(startFormattedDateTag);
+            if (s) { strncpy(sDatePrev, s, sizeof(sDatePrev) - 1); }
+            s = GetTagChar(startFormattedTimeTag);
+            if (s) { strncpy(sTimePrev, s, sizeof(sTimePrev) - 1); }
 
             /* Merge consecutive slices (same identifiers) when runtime/downtime are tiny */
             if (matchesLast &&
