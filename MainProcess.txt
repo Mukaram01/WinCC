@@ -343,9 +343,9 @@ void MainProcess(
             /* GetTagChar returns a pointer to a shared WinCC buffer reused on each call.*/
             /*Copy both strings before any subsequent call can overwrite the buffer. */
             s = GetTagChar(startFormattedDateTag);
-            if (s) { strncpy(sDatePrev, s, sizeof(sDatePrev) - 1); }
+            if (s) { strncpy(sDatePrev, s, sizeof(sDatePrev) - 1); sDatePrev[sizeof(sDatePrev) - 1] = '\0'; }
             s = GetTagChar(startFormattedTimeTag);
-            if (s) { strncpy(sTimePrev, s, sizeof(sTimePrev) - 1); }
+            if (s) { strncpy(sTimePrev, s, sizeof(sTimePrev) - 1); sTimePrev[sizeof(sTimePrev) - 1] = '\0'; }
 
             /* Merge consecutive slices (same identifiers) when runtime/downtime are tiny */
             if (matchesLast &&
@@ -424,8 +424,12 @@ void MainProcess(
         /* Reset downtime bookkeeping so the new job starts clean */
         set_tag_double_if_valid(downTimeTag,        0.0);
         set_tag_double_if_valid(runTimeTag,         0.0);
-        g_mergeCarryRuntimeSeconds  = 0.0;
-        g_mergeCarryDowntimeSeconds = 0.0;
+        /* NOTE: g_mergeCarryRuntimeSeconds / g_mergeCarryDowntimeSeconds are NOT
+           reset here.  They are already cleared by remember_archived_row() after a
+           successful archive write, and by the !matchesLast branch above when the
+           job identifiers change.  Resetting them here would discard any carry that
+           was just accumulated for a short same-identifier slice, breaking the merge
+           feature entirely. */
         UpdateFormattedTime(downTimeTag, downFormattedTimeTag);
 
         /* Stamp start once */
