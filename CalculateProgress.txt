@@ -31,7 +31,11 @@ void CalculateProgress(const char* startTimeTag,
     double est  = GetTagDouble(estDurationTag);
     double down = GetTagDouble(downtimeTag);
     double prog = GetTagDouble(progRuntimeTag);
-    double total, pct;
+    double total, pct, elapsed;
+    const char* st;
+    const char* sd;
+    int hh=0, mm=0, dd=0, mon=0, yy=0;
+    time_t start_epoch = (time_t)-1;
 
     if(est<0.0) est=0.0; if(down<0.0) down=0.0; if(prog<0.0) prog=0.0;
 
@@ -42,34 +46,52 @@ void CalculateProgress(const char* startTimeTag,
     } else {
         s_progHighWater = prog;
     }
- 
+
     total = est;   /* est = historical (runtime+downtime); don't add live down again */
-    pct = (total>0.0)? (prog/total)*100.0 : 0.0;
+
+    /* Parse start time/date once so it can be reused for both pct and
+       end-time calculation below. */
+    st = GetTagChar(startTimeTag);
+    sd = GetTagChar(startDateTag);
+    if(st && sd && parse_hhmm(st,&hh,&mm) && parse_ddmmyyyy(sd,&dd,&mon,&yy)){
+        struct tm t;
+        t.tm_sec=0; t.tm_min=mm; t.tm_hour=hh; t.tm_mday=dd; t.tm_mon=mon-1; t.tm_year=yy-1900;
+        t.tm_wday=0; t.tm_yday=0; t.tm_isdst=-1;
+        start_epoch = mktime(&t);
+    }
+
+    /* Use wall-clock elapsed time against the scheduled window for pct.
+       Fall back to prog/est ratio if start time parsing failed. */
+    if(start_epoch != (time_t)-1 && est > 0.0){
+        time_t now = time(NULL);
+        elapsed = (double)(now - start_epoch);
+        if(elapsed < 0.0) elapsed = 0.0;
+        if(elapsed > est) elapsed = est;
+        pct = (elapsed / est) * 100.0;
+    } else {
+        elapsed = -1.0;
+        pct = (total>0.0)? (prog/total)*100.0 : 0.0;
+        printf("CalculateProgress: start parse failed, using prog/est fallback st='%s' sd='%s'\n",
+               st ? st : "(null)", sd ? sd : "(null)");
+    }
     if(pct<0.0) pct=0.0; if(pct>100.0) pct=100.0;
 
-    printf("CalculateProgress: est=%.2f prog=%.2f down=%.2f total=%.2f pct=%.1f\n",
-           est, prog, down, total, pct);
+    printf("CalculateProgress: est=%.2f prog=%.2f down=%.2f elapsed=%.2f total=%.2f pct=%.1f\n",
+           est, prog, down, elapsed, total, pct);
     if (percentageTag && percentageTag[0] != '\0') {
         SetTagDouble(percentageTag, pct);
     }
 
     if((endDayTag && endDayTag[0]!='\0') || (endTimeTag && endTimeTag[0]!='\0')){
-        const char* st = GetTagChar(startTimeTag);
-        const char* sd = GetTagChar(startDateTag);
-        int hh=0, mm=0, dd=0, mon=0, yy=0;
-        if(st&&sd&&parse_hhmm(st,&hh,&mm)&&parse_ddmmyyyy(sd,&dd,&mon,&yy)){
-            struct tm t; time_t start_epoch, end_epoch; struct tm* pe; char outD[11]; char outT[6];
+        if(start_epoch != (time_t)-1){
+            time_t end_epoch; struct tm* pe; char outD[11]; char outT[6];
             double plannedDuration = total;
-            double elapsed = prog + down;
+            double elapsedProgDown = prog + down;
 
-            if(plannedDuration < elapsed) plannedDuration = elapsed;
+            if(plannedDuration < elapsedProgDown) plannedDuration = elapsedProgDown;
 
-            t.tm_sec=0; t.tm_min=mm; t.tm_hour=hh; t.tm_mday=dd; t.tm_mon=mon-1; t.tm_year=yy-1900;
-            t.tm_wday=0; t.tm_yday=0; t.tm_isdst=-1;
-
-            start_epoch=mktime(&t); if(start_epoch==(time_t)-1) return;
-            end_epoch=start_epoch + (time_t)(plannedDuration + 0.5);
-            pe=localtime(&end_epoch); if(!pe) return;
+            end_epoch = start_epoch + (time_t)(plannedDuration + 0.5);
+            pe = localtime(&end_epoch); if(!pe) return;
             sprintf(outD,"%02d/%02d/%04d",pe->tm_mday,pe->tm_mon+1,pe->tm_year+1900);
             sprintf(outT,"%02d:%02d",pe->tm_hour,pe->tm_min);
             if(endDayTag && endDayTag[0]!='\0') SetTagChar(endDayTag,outD);
