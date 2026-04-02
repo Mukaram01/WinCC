@@ -72,7 +72,6 @@ void CalculateProgress(const char* startTimeTag,
             pe=localtime(&end_epoch); if(!pe) return;
             sprintf(outD,"%02d/%02d/%04d",pe->tm_mday,pe->tm_mon+1,pe->tm_year+1900);
             sprintf(outT,"%02d:%02d",pe->tm_hour,pe->tm_min);
-            printf("CalculateProgress: planned end date=%s time=%s\n", outD, outT);
             if(endDayTag && endDayTag[0]!='\0') SetTagChar(endDayTag,outD);
             if(endTimeTag && endTimeTag[0]!='\0') SetTagChar(endTimeTag,outT);
         } else {
