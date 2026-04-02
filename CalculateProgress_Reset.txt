@@ -1,0 +1,5 @@
+void CalculateProgress_Reset(void) {
+    static double s_progHighWater = 0.0;
+    /* Reset the high-water mark so the next job starts from zero. */
+    s_progHighWater = 0.0;
+}
