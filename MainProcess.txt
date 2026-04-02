@@ -331,12 +331,10 @@ void MainProcess(
     isNew = (CompareIdentifiers(curOrder, curSerial, curOp, curPart,
                                 prevOrder, prevSerial, prevOp, prevPart) != 0);
 
-    printf("MainProcess: curOrder=%s curSerial=%s curOp=%s curPart=%s isNew=%d\n",
-           curOrder, curSerial, curOp, curPart, isNew);
-    printf("MainProcess: prevOrder=%s prevSerial=%s prevOp=%s prevPart=%s\n",
-           prevOrder, prevSerial, prevOp, prevPart);
-    printf("MainProcess: curCycle=%.2f prevCycle=%.2f totalRt=%.2f\n",
-           curCycle, prevCycle, totalRt);
+    if (isNew) {
+        printf("MainProcess: curOrder=%s curSerial=%s curOp=%s curPart=%s isNew=%d\n",
+               curOrder, curSerial, curOp, curPart, isNew);
+    }
 
     /* Sanity-check the cycle counter before using it */
     if ((curCycle - prevCycle) < 0.0 || (curCycle - prevCycle) > MAX_CYCLE_DELTA) {
@@ -496,8 +494,6 @@ void MainProcess(
     else {
         /* ----- Same job: accumulate runtime slice & refresh % ----- */
         totalRt = AccumulateRuntime(curCycle, &prevCycle, &totalRt);
-        printf("MainProcess: same job accumulate curCycle=%.2f prevCycle=%.2f totalRt=%.2f\n",
-               curCycle, prevCycle, totalRt);
         set_tag_double_if_valid(previousCycleTag, prevCycle);
         set_tag_double_if_valid(totalRuntimeTag,  totalRt);
         set_tag_double_if_valid(runTimeTag,        totalRt); /* keep display tag in sync */
