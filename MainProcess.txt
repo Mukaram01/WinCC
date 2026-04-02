@@ -302,7 +302,14 @@ void MainProcess(
     /* ETA history is read from the same archive we write to */
     const char* ETA_ARCHIVE = "ProductionEvents";
 
-    if (IsMasterServer() != 1) return;
+    printf("MainProcess: entry machine=%s archive=%s\n",
+           machineName ? machineName : "(null)",
+           archiveName ? archiveName : "(null)");
+
+    if (IsMasterServer() != 1) {
+        printf("MainProcess: not master server, aborting\n");
+        return;
+    }
 
     /* Read current identifiers */
     GetTagValues(currentOrderTag, currentSerialTag, currentOperationTag, currentPartTag,
@@ -323,9 +330,18 @@ void MainProcess(
     isNew = (CompareIdentifiers(curOrder, curSerial, curOp, curPart,
                                 prevOrder, prevSerial, prevOp, prevPart) != 0);
 
+    printf("MainProcess: curOrder=%s curSerial=%s curOp=%s curPart=%s isNew=%d\n",
+           curOrder, curSerial, curOp, curPart, isNew);
+    printf("MainProcess: prevOrder=%s prevSerial=%s prevOp=%s prevPart=%s\n",
+           prevOrder, prevSerial, prevOp, prevPart);
+    printf("MainProcess: curCycle=%.2f prevCycle=%.2f totalRt=%.2f\n",
+           curCycle, prevCycle, totalRt);
+
     /* Sanity-check the cycle counter before using it */
     if ((curCycle - prevCycle) < 0.0 || (curCycle - prevCycle) > MAX_CYCLE_DELTA) {
         /* Counter wrapped or jumped; reset baseline without accumulating */
+        printf("MainProcess: cycle counter anomaly (delta=%.2f), resetting baseline\n",
+               curCycle - prevCycle);
         prevCycle = curCycle;
     }
 
@@ -340,6 +356,11 @@ void MainProcess(
             double downSecsPrev = GetTagDouble(downTimeTag);
             int    matchesLast = matches_last_archived(prevOrder, prevSerial, prevOp, prevPart);
 
+            printf("MainProcess: flush prevOrder=%s prevOp=%s prevPart=%s\n",
+                   prevOrder, prevOp, prevPart);
+            printf("MainProcess: flush lastRtSeconds=%.2f downSecsPrev=%.2f etaSecsPrev=%.2f matchesLast=%d\n",
+                   lastRtSeconds, downSecsPrev, etaSecsPrev, matchesLast);
+
             /* GetTagChar returns a pointer to a shared WinCC buffer reused on each call.*/
             /*Copy both strings before any subsequent call can overwrite the buffer. */
             s = GetTagChar(startFormattedDateTag);
@@ -351,6 +372,10 @@ void MainProcess(
             if (matchesLast &&
                 lastRtSeconds < MERGE_RUNTIME_THRESHOLD &&
                 downSecsPrev < MERGE_RUNTIME_THRESHOLD) {
+                printf("MainProcess: tiny slice merged into carry (rt=%.2f down=%.2f carry_rt=%.2f carry_down=%.2f)\n",
+                       lastRtSeconds, downSecsPrev,
+                       g_mergeCarryRuntimeSeconds + lastRtSeconds,
+                       g_mergeCarryDowntimeSeconds + downSecsPrev);
                 g_mergeCarryRuntimeSeconds  += lastRtSeconds;
                 g_mergeCarryDowntimeSeconds += downSecsPrev;
             }
@@ -371,17 +396,21 @@ void MainProcess(
                     machineName && *machineName &&
                     sDatePrev && *sDatePrev &&
                     sTimePrev && *sTimePrev) {
-
                     char runHHMM[16];
                     char downHHMM[16];
                     char endDate[11];
                     char endTime[6];
                     double elapsedSeconds = elapsed_since_start_seconds(sDatePrev, sTimePrev);
 
+                    printf("MainProcess: archive write path mergedRt=%.2f mergedDown=%.2f sDate=%s sTime=%s\n",
+                           mergedRuntimeSeconds, mergedDowntimeSeconds, sDatePrev, sTimePrev);
+
                     /* If the live downtime tag under-reported, fall back to elapsed - runtime */
                     if (elapsedSeconds >= 0.0) {
                         double inferredDown = elapsedSeconds - mergedRuntimeSeconds;
                         if (inferredDown > mergedDowntimeSeconds) {
+                            printf("MainProcess: downtime adjusted from %.2f to inferred %.2f (elapsed=%.2f)\n",
+                                   mergedDowntimeSeconds, inferredDown, elapsedSeconds);
                             mergedDowntimeSeconds = inferredDown;
                         }
                     }
@@ -394,7 +423,12 @@ void MainProcess(
                     secs_to_HHMM(mergedDowntimeSeconds, downHHMM, sizeof(downHHMM));
                     planned_from_start_and_eta(sDatePrev, sTimePrev, etaSecsPrev, endDate, endTime);
 
+                    printf("MainProcess: runHHMM=%s downHHMM=%s endDate=%s endTime=%s\n",
+                           runHHMM, downHHMM, endDate, endTime);
+
                     if (endDate[0] && endTime[0]) {
+                        printf("MainProcess: calling WriteValuesToUserArchive_V2 machine=%s order=%s serial=%s\n",
+                               machineName, prevOrder, prevSerial);
                         WriteValuesToUserArchive_V2(archiveName, machineName,
                                                     prevOrder, prevSerial, prevOp, prevPart,
                                                     runHHMM,                /* RuntimeHHMM */
@@ -405,15 +439,22 @@ void MainProcess(
                         remember_archived_row(prevOrder, prevSerial, prevOp, prevPart,
                                               mergedRuntimeSeconds, mergedDowntimeSeconds);
                     } else {
+                        printf("MainProcess: skipping archive write - endDate/endTime empty (ETA may have failed)\n");
                         remember_archived_row(prevOrder, prevSerial, prevOp, prevPart, 0.0, 0.0);
                     }
                 } else {
+                    printf("MainProcess: skipping archive write - mergedRt=%.2f threshold=%d machine='%s' sDate='%s' sTime='%s'\n",
+                           mergedRuntimeSeconds, MIN_RUNTIME_THRESHOLD,
+                           machineName ? machineName : "(null)",
+                           sDatePrev, sTimePrev);
                     remember_archived_row(prevOrder, prevSerial, prevOp, prevPart, 0.0, 0.0);
                 }
             }
         }
 
         /* ----- Start new job ----- */
+        printf("MainProcess: starting new job curOrder=%s curSerial=%s curOp=%s curPart=%s\n",
+               curOrder, curSerial, curOp, curPart);
         set_tag_char_if_valid(previousOrderTag,     curOrder);
         set_tag_char_if_valid(previousSerialTag,    curSerial);
         set_tag_char_if_valid(previousOperationTag, curOp);
@@ -437,6 +478,7 @@ void MainProcess(
 
         /* ETA once (seconds) from numeric history */
         CalculateEstimatedEndTime(archiveName, currentOperationTag, currentPartTag, estDurationTag);
+        printf("MainProcess: new job ETA=%.2f seconds\n", GetTagDouble(estDurationTag));
 
         /* Planned end (HH:MM & DD/MM/YYYY) from start date+time + ETA */
         UpdateFormattedEndTime(startFormattedTimeTag, startFormattedDateTag, estDurationTag,
@@ -448,7 +490,9 @@ void MainProcess(
     }
     else {
         /* ----- Same job: accumulate runtime slice & refresh % ----- */
-                totalRt = AccumulateRuntime(curCycle, &prevCycle, &totalRt);
+        totalRt = AccumulateRuntime(curCycle, &prevCycle, &totalRt);
+        printf("MainProcess: same job accumulate curCycle=%.2f prevCycle=%.2f totalRt=%.2f\n",
+               curCycle, prevCycle, totalRt);
         set_tag_double_if_valid(previousCycleTag, prevCycle);
         set_tag_double_if_valid(totalRuntimeTag,  totalRt);
         set_tag_double_if_valid(runTimeTag,        totalRt); /* keep display tag in sync */

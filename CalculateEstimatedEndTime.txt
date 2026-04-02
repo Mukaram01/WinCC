@@ -57,6 +57,7 @@ void CalculateEstimatedEndTime(const char* archiveName,
     char partNumber[64];
 
     if (!archiveName || !*archiveName || !operationTag || !*operationTag || !partTag || !*partTag) {
+        printf("CalculateEstimatedEndTime: missing archive/tag args, using default ETA\n");
         SetTagDouble(resultTag, DEFAULT_ETA_SECONDS);
         return;
     }
@@ -65,13 +66,18 @@ void CalculateEstimatedEndTime(const char* archiveName,
     copyTrim(partNumber, sizeof(partNumber), partNumberSrc ? partNumberSrc : "");
 
     if (!operationNumber[0] || !partNumber[0]) {
+        printf("CalculateEstimatedEndTime: empty operation='%s' or part='%s', using default ETA\n",
+               operationNumber, partNumber);
         SetTagDouble(resultTag, DEFAULT_ETA_SECONDS);
         return;
     }
 
-    if (!uaConnect(&hConnect)) goto cleanup;
-    if (!uaQueryArchiveByName(hConnect, archiveName, &hArchive)) goto cleanup;
-    if (!uaArchiveOpen(hArchive)) goto cleanup;
+    printf("CalculateEstimatedEndTime: searching archive=%s operation=%s part=%s\n",
+           archiveName, operationNumber, partNumber);
+
+    if (!uaConnect(&hConnect)) { printf("CalculateEstimatedEndTime: uaConnect FAILED\n"); goto cleanup; }
+    if (!uaQueryArchiveByName(hConnect, archiveName, &hArchive)) { printf("CalculateEstimatedEndTime: uaQueryArchiveByName FAILED\n"); goto cleanup; }
+    if (!uaArchiveOpen(hArchive)) { printf("CalculateEstimatedEndTime: uaArchiveOpen FAILED\n"); goto cleanup; }
     archiveOpened = 1;
 
     if (uaArchiveMoveFirst(hArchive)) {
@@ -161,10 +167,16 @@ void CalculateEstimatedEndTime(const char* archiveName,
         } else {
             median = 0.5 * (runTimes[storedSamples / 2 - 1] + runTimes[storedSamples / 2]);
         }
+        printf("CalculateEstimatedEndTime: %d samples found, median ETA=%.2f seconds\n",
+               storedSamples, median);
     } else if (storedSamples > 0) {
         median = sumSamples / (double)storedSamples;
+        printf("CalculateEstimatedEndTime: only %d sample(s) (need %d), using mean ETA=%.2f seconds\n",
+               storedSamples, MIN_REQUIRED_SAMPLES, median);
     } else {
         median = DEFAULT_ETA_SECONDS;
+        printf("CalculateEstimatedEndTime: no matching samples, using default ETA=%.2f seconds\n",
+               median);
     }
 
 cleanup:
@@ -175,6 +187,8 @@ cleanup:
     if (hConnect) {
         uaDisconnect(hConnect);
     }
+    printf("CalculateEstimatedEndTime: setting ETA=%.2f seconds for operation=%s part=%s\n",
+           median, operationNumber, partNumber);
     SetTagDouble(resultTag, median);
 }
 

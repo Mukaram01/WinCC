@@ -136,12 +136,20 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
     double newDownSeconds = 0.0;
 
     if (!archiveName || archiveName[0] == '\0') {
+        printf("WriteValuesToUserArchive_V2: archiveName is null/empty, aborting\n");
         return;
     }
+
+    printf("WriteValuesToUserArchive_V2: entry archive=%s machine=%s order=%s serial=%s op=%s part=%s rt=%s down=%s\n",
+           archiveName, nz(machineName), nz(orderNumber), nz(serialNumber),
+           nz(operationNumber), nz(partNumber), nz(runtimeHHMM), nz(downtimeHHMM));
+    printf("WriteValuesToUserArchive_V2: startDate=%s startTime=%s endDate=%s endTime=%s\n",
+           nz(startDate), nz(startTime), nz(plannedEndDate), nz(plannedEndTime));
 
     /* Connect */
     ok = uaConnect(&hCon);
     if (!ok) {
+        printf("WriteValuesToUserArchive_V2: uaConnect FAILED\n");
         SetTagWord("ArchiveInsertFailed", 1);
         return;
     }
@@ -149,6 +157,7 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
     /* Locate archive by name */
     ok = uaQueryArchiveByName(hCon, archiveName, &hArc);
     if (!ok || !hArc) {
+        printf("WriteValuesToUserArchive_V2: uaQueryArchiveByName FAILED for '%s'\n", archiveName);
         SetTagWord("ArchiveInsertFailed", 1);
         uaDisconnect(hCon);
         return;
@@ -156,6 +165,7 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
     /* Open, set fields, insert */
     ok = uaArchiveOpen(hArc);
     if (!ok) {
+        printf("WriteValuesToUserArchive_V2: uaArchiveOpen FAILED for '%s'\n", archiveName);
         SetTagWord("ArchiveInsertFailed", 1);
         uaReleaseArchive(hArc);
         uaDisconnect(hCon);
@@ -202,6 +212,10 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
                     seconds_to_hhmm(oldRunSeconds + newRunSeconds, mergedRun);
                     seconds_to_hhmm(oldDownSeconds + newDownSeconds, mergedDown);
 
+                    printf("WriteValuesToUserArchive_V2: found existing row - updating\n");
+                    printf("  existingRun=%s existingDown=%s -> mergedRun=%s mergedDown=%s\n",
+                           existingRun, existingDown, mergedRun, mergedDown);
+
                     uaArchiveSetFieldValueString(hArc, F_MACHINE,       nz(machineName));
                     uaArchiveSetFieldValueString(hArc, F_ORDER,         nz(orderNumber));
                     uaArchiveSetFieldValueString(hArc, F_SERIAL,        nz(serialNumber));
@@ -217,12 +231,14 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
                     uaArchiveSetFieldValueString(hArc, F_END_TIME,      nz(plannedEndTime));
 
                     writeOk = uaArchiveUpdate(hArc);
+                    printf("WriteValuesToUserArchive_V2: uaArchiveUpdate result=%d\n", writeOk);
                     break;
                 }
             } while (uaArchiveMoveNext(hArc));
         }
 
         if (!hasExisting) {
+            printf("WriteValuesToUserArchive_V2: no existing row found - inserting new row\n");
             uaArchiveSetFieldValueString(hArc, F_MACHINE,       nz(machineName));
             uaArchiveSetFieldValueString(hArc, F_ORDER,         nz(orderNumber));
             uaArchiveSetFieldValueString(hArc, F_SERIAL,        nz(serialNumber));
@@ -236,9 +252,12 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
             uaArchiveSetFieldValueString(hArc, F_END_TIME,      nz(plannedEndTime));
 
             writeOk = uaArchiveInsert(hArc);
+            printf("WriteValuesToUserArchive_V2: uaArchiveInsert result=%d\n", writeOk);
         }
 
         if (!writeOk) {
+            printf("WriteValuesToUserArchive_V2: write FAILED (hasExisting=%d), setting ArchiveInsertFailed\n",
+                   hasExisting);
             SetTagWord("ArchiveInsertFailed", 1);
         }
 
@@ -267,6 +286,7 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
         }
 
         if (duplicateCount > 1) {
+            printf("WriteValuesToUserArchive_V2: DUPLICATE check FAILED duplicateCount=%d\n", duplicateCount);
             SetTagWord("ArchiveDuplicateCheckFailed", 1);
             SetTagWord("ArchiveInsertFailed", 1);
         }
