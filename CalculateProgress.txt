@@ -81,8 +81,3 @@ void CalculateProgress(const char* startTimeTag,
         }
     }
 }
-
-void CalculateProgress_Reset(void) {
-    /* Reset the high-water mark so the next job starts from zero. */
-    s_progHighWater = 0.0;
-}
