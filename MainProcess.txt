@@ -49,6 +49,7 @@ void   CalculateProgress(const char* startTimeTag,
                          const char* endTimeTag,
                          const char* endDayTag,
                          const char* progRuntimeTag);
+void   CalculateProgress_Reset(void);
 int    IsMasterServer(void);
 void   GetTagValues(const char* orderTag, const char* serialTag,
                     const char* operationTag, const char* partTag,
@@ -343,6 +344,9 @@ void MainProcess(
         printf("MainProcess: cycle counter anomaly (delta=%.2f), resetting baseline\n",
                curCycle - prevCycle);
         prevCycle = curCycle;
+        /* Write the corrected baseline back immediately so the next invocation
+           does not re-trigger the anomaly for the same cycle value. */
+        set_tag_double_if_valid(previousCycleTag, prevCycle);
     }
 
     if (isNew) {
@@ -465,6 +469,7 @@ void MainProcess(
         /* Reset downtime bookkeeping so the new job starts clean */
         set_tag_double_if_valid(downTimeTag,        0.0);
         set_tag_double_if_valid(runTimeTag,         0.0);
+        CalculateProgress_Reset();
         /* NOTE: g_mergeCarryRuntimeSeconds / g_mergeCarryDowntimeSeconds are NOT
            reset here.  They are already cleared by remember_archived_row() after a
            successful archive write, and by the !matchesLast branch above when the

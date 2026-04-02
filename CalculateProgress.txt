@@ -15,6 +15,10 @@ static int parse_ddmmyyyy(const char* s,int* d,int* mo,int* y){
     return (*d>=1&&*d<=31&&*mo>=1&&*mo<=12&&*y>=1970);
 }
 
+/* Monotonic floor for prog — prevents percentage from decreasing mid-job after
+   a cycle counter anomaly reset.  Reset by CalculateProgress_Reset() on new job. */
+static double s_progHighWater = 0.0;
+
 void CalculateProgress(const char* startTimeTag,
                        const char* startDateTag,
                        const char* estDurationTag,
@@ -30,6 +34,14 @@ void CalculateProgress(const char* startTimeTag,
     double total, pct;
 
     if(est<0.0) est=0.0; if(down<0.0) down=0.0; if(prog<0.0) prog=0.0;
+
+    /* Clamp prog to its high-water mark so regressions after anomaly resets
+       do not cause the displayed percentage to decrease mid-job. */
+    if (prog < s_progHighWater) {
+        prog = s_progHighWater;
+    } else {
+        s_progHighWater = prog;
+    }
  
     total = est;   /* est = historical (runtime+downtime); don't add live down again */
     pct = (total>0.0)? (prog/total)*100.0 : 0.0;
@@ -68,4 +80,9 @@ void CalculateProgress(const char* startTimeTag,
                    st ? st : "(null)", sd ? sd : "(null)");
         }
     }
+}
+
+void CalculateProgress_Reset(void) {
+    /* Reset the high-water mark so the next job starts from zero. */
+    s_progHighWater = 0.0;
 }
