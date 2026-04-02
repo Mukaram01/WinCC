@@ -155,7 +155,13 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
     }
     /* Open, set fields, insert */
     ok = uaArchiveOpen(hArc);
-    if (ok) {
+    if (!ok) {
+        SetTagWord("ArchiveInsertFailed", 1);
+        uaReleaseArchive(hArc);
+        uaDisconnect(hCon);
+        return;
+    }
+    {
         /* Deterministic de-dupe key:
            MachineName + OrderNumber + SerialNumber + OperationNumber + PartNumber + StartDate
            StartDate is included so that the same job on a different production day
