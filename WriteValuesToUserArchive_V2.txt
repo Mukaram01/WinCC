@@ -15,6 +15,13 @@
 
 #include "apdefap.h"
 
+/* 5-minute threshold: extra archive rows with runtime >= this are merged;
+   rows below this are discarded (too short to be meaningful). */
+#define MIN_MERGE_RUNTIME_SECONDS (300.0)
+
+/* Maximum number of extra duplicate row IDs collected per call. */
+#define MAX_DUP_IDS 64
+
 /* --- field indices for ProductionEvents --- */
 #define F_MACHINE        1
 #define F_ORDER          2
@@ -260,15 +267,28 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
             SetTagWord("ArchiveInsertFailed", 1);
         }
 
-        /* Post-write deduplication: scan for any extra matching rows and delete
-           them, keeping only the first row (which was already updated/inserted
-           above).  This handles pre-existing duplicate rows left by earlier bugs
-           as well as any race-created duplicates.
-           Row identity uses field 0 (the archive primary key) read via
-           uaArchiveGetFieldValueLong, deleted with uaArchiveDelete("ID=N"). */
+        /* Post-write deduplication with merge-or-discard for extra rows.
+           Rules (applied after every write):
+             - The survivor is the first matching row (already updated with the
+               incoming data in the write phase above: merged runtime/downtime,
+               preserved start date/time, updated planned end date/time).
+             - Extra rows (2nd, 3rd, … match) with RuntimeHHMM >= 5 min (300 s)
+               are MERGED: their runtime and downtime are folded into the survivor,
+               then the extra row is deleted.
+             - Extra rows with RuntimeHHMM < 5 min are DELETED without merging.
+           Start date/time  : survivor's value is used (kept from the write phase).
+           Planned end date/time: incoming value is used (set in the write phase). */
         {
-            int matchCount  = 0;
-            int deleteCount = 0;
+            long   survivorID    = -1L;
+            double extraRunSecs  = 0.0;
+            double extraDownSecs = 0.0;
+            int    extraMerged   = 0;
+            int    deleteCount   = 0;
+            int    deleteIDCount = 0;
+            long   deleteIDs[MAX_DUP_IDS];
+            int    i;
+
+            /* Pass 1 — identify the survivor and collect extra rows */
             if (uaArchiveMoveFirst(hArc)) {
                 do {
                     char chkMachine[64]   = "";
@@ -277,8 +297,7 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
                     char chkOperation[64] = "";
                     char chkPart[64]      = "";
                     char chkStartDate[16] = "";
-                    long dupID            = 0L;
-                    char whereClause[32]  = "";
+                    long rowID = -1L;
 
                     uaArchiveGetFieldValueString(hArc, F_MACHINE,    chkMachine,    sizeof(chkMachine));
                     uaArchiveGetFieldValueString(hArc, F_ORDER,      chkOrder,      sizeof(chkOrder));
@@ -289,34 +308,109 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
 
                     if (key_matches(machineName, orderNumber, serialNumber, operationNumber, partNumber, startDate,
                                     chkMachine, chkOrder, chkSerial, chkOperation, chkPart, chkStartDate)) {
-                        ++matchCount;
-                        if (matchCount > 1) {
-                            /* Extra duplicate: read its primary key and delete it */
-                            if (uaArchiveGetFieldValueLong(hArc, 0, &dupID)) {
-                                sprintf(whereClause, "ID=%ld", dupID);
-                                if (uaArchiveDelete(hArc, whereClause)) {
-                                    ++deleteCount;
-                                    printf("WriteValuesToUserArchive_V2: deleted duplicate row ID=%ld\n", dupID);
-                                } else {
-                                    printf("WriteValuesToUserArchive_V2: delete duplicate failed ID=%ld err=%d\n",
-                                           dupID, uaGetLastError());
-                                }
+                        if (!uaArchiveGetFieldValueLong(hArc, 0, &rowID)) rowID = -1L;
+
+                        if (survivorID == -1L) {
+                            /* First match = survivor (already updated above) */
+                            survivorID = rowID;
+                        } else {
+                            /* Extra row: merge if runtime >= 5 min, else discard */
+                            char   extraRun[16]  = "";
+                            char   extraDown[16] = "";
+                            double rowRunSecs    = 0.0;
+                            double rowDownSecs   = 0.0;
+
+                            uaArchiveGetFieldValueString(hArc, F_RUNTIME_HHMM,  extraRun,  sizeof(extraRun));
+                            uaArchiveGetFieldValueString(hArc, F_DOWNTIME_HHMM, extraDown, sizeof(extraDown));
+                            if (!parse_hhmm_seconds(extraRun,  &rowRunSecs))  rowRunSecs  = 0.0;
+                            if (!parse_hhmm_seconds(extraDown, &rowDownSecs)) rowDownSecs = 0.0;
+
+                            if (rowRunSecs >= MIN_MERGE_RUNTIME_SECONDS) {
+                                extraRunSecs  += rowRunSecs;
+                                extraDownSecs += rowDownSecs;
+                                ++extraMerged;
+                                printf("WriteValuesToUserArchive_V2: queuing merge of extra row ID=%ld rt=%s down=%s\n",
+                                       rowID, extraRun, extraDown);
                             } else {
-                                printf("WriteValuesToUserArchive_V2: cannot read PK for duplicate row, skipping delete\n");
+                                printf("WriteValuesToUserArchive_V2: discarding short extra row ID=%ld rt=%s (< 5 min)\n",
+                                       rowID, extraRun);
+                            }
+
+                            if (deleteIDCount < MAX_DUP_IDS) {
+                                deleteIDs[deleteIDCount++] = rowID;
+                            } else {
+                                printf("WriteValuesToUserArchive_V2: MAX_DUP_IDS limit reached, extra row ID=%ld not queued for deletion\n",
+                                       rowID);
+                                SetTagWord("ArchiveDuplicateCheckFailed", 1);
                             }
                         }
                     }
                 } while (uaArchiveMoveNext(hArc));
             }
 
-            if (deleteCount > 0) {
-                printf("WriteValuesToUserArchive_V2: purged %d duplicate row(s) machine=%s order=%s\n",
-                       deleteCount, nz(machineName), nz(orderNumber));
+            /* Pass 2 — if extra rows were merged, fold their totals into the
+               survivor.  Start date/time and planned end are already correct
+               on the survivor from the write phase; only runtime/downtime change. */
+            if (extraMerged > 0 && survivorID >= 0L) {
+                if (uaArchiveMoveFirst(hArc)) {
+                    do {
+                        long rowID = -1L;
+                        if (uaArchiveGetFieldValueLong(hArc, 0, &rowID) && rowID == survivorID) {
+                            char   survRun[16]   = "";
+                            char   survDown[16]  = "";
+                            char   newRun[16]    = "";
+                            char   newDown[16]   = "";
+                            double survRunSecs   = 0.0;
+                            double survDownSecs  = 0.0;
+
+                            uaArchiveGetFieldValueString(hArc, F_RUNTIME_HHMM,  survRun,  sizeof(survRun));
+                            uaArchiveGetFieldValueString(hArc, F_DOWNTIME_HHMM, survDown, sizeof(survDown));
+                            if (!parse_hhmm_seconds(survRun,  &survRunSecs))  survRunSecs  = 0.0;
+                            if (!parse_hhmm_seconds(survDown, &survDownSecs)) survDownSecs = 0.0;
+
+                            seconds_to_hhmm(survRunSecs  + extraRunSecs,  newRun);
+                            seconds_to_hhmm(survDownSecs + extraDownSecs, newDown);
+
+                            printf("WriteValuesToUserArchive_V2: survivor ID=%ld adding %.0f s extra rt: %s->%s down: %s->%s\n",
+                                   survivorID, extraRunSecs, survRun, newRun, survDown, newDown);
+
+                            uaArchiveSetFieldValueString(hArc, F_RUNTIME_HHMM,  newRun);
+                            uaArchiveSetFieldValueString(hArc, F_DOWNTIME_HHMM, newDown);
+                            if (!uaArchiveUpdate(hArc)) {
+                                printf("WriteValuesToUserArchive_V2: survivor merge update FAILED err=%d\n",
+                                       uaGetLastError());
+                            }
+                            break;
+                        }
+                    } while (uaArchiveMoveNext(hArc));
+                }
             }
-            /* Flag residual duplicates that could not be deleted */
-            if (matchCount > 1 && deleteCount < matchCount - 1) {
-                printf("WriteValuesToUserArchive_V2: dedup issue matchCount=%d deleteCount=%d\n",
-                       matchCount, deleteCount);
+
+            /* Pass 3 — delete every collected extra row by primary key.
+               deleteIDs[i] may be -1L if uaArchiveGetFieldValueLong failed for
+               that row; skip those to avoid constructing a malformed WHERE clause. */
+            for (i = 0; i < deleteIDCount; ++i) {
+                char whereClause[32] = "";
+                if (deleteIDs[i] >= 0L) {
+                    sprintf(whereClause, "ID=%ld", deleteIDs[i]);
+                    if (uaArchiveDelete(hArc, whereClause)) {
+                        ++deleteCount;
+                        printf("WriteValuesToUserArchive_V2: deleted extra row ID=%ld\n", deleteIDs[i]);
+                    } else {
+                        printf("WriteValuesToUserArchive_V2: delete extra row FAILED ID=%ld err=%d\n",
+                               deleteIDs[i], uaGetLastError());
+                    }
+                }
+            }
+
+            if (deleteCount > 0 || extraMerged > 0) {
+                printf("WriteValuesToUserArchive_V2: dedup done merged=%d deleted=%d machine=%s order=%s\n",
+                       extraMerged, deleteCount, nz(machineName), nz(orderNumber));
+            }
+            /* Flag residual extras that could not be deleted */
+            if (deleteIDCount > 0 && deleteCount < deleteIDCount) {
+                printf("WriteValuesToUserArchive_V2: dedup issue deleteIDCount=%d deleteCount=%d\n",
+                       deleteIDCount, deleteCount);
                 SetTagWord("ArchiveDuplicateCheckFailed", 1);
                 SetTagWord("ArchiveInsertFailed", 1);
             }
