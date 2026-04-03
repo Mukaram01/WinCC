@@ -1,7 +1,8 @@
-void CalculateProgress_Reset(void) {
-    /* Reset the monotonic floor so the next job's percentage starts from zero.
-       s_progHighWater is a module-level global defined in CalculateProgress.c;
-       declared extern here so this separate action file can write to it. */
-    extern double s_progHighWater;
-    s_progHighWater = 0.0;
+void CalculateProgress_Reset(const char* progHighWaterTag) {
+    /* Reset the per-machine monotonic floor so the next job's percentage starts
+       from zero.  The high-water mark is stored in a WinCC tag so that multiple
+       machines using the same action module remain independent. */
+    if (progHighWaterTag && progHighWaterTag[0] != '\0') {
+        SetTagDouble(progHighWaterTag, 0.0);
+    }
 }
