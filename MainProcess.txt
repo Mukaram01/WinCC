@@ -49,8 +49,9 @@ void   CalculateProgress(const char* startTimeTag,
                          const char* percentageTag,
                          const char* endTimeTag,
                          const char* endDayTag,
-                         const char* progRuntimeTag);
-void   CalculateProgress_Reset(void);
+                         const char* progRuntimeTag,
+                         const char* progHighWaterTag);
+void   CalculateProgress_Reset(const char* progHighWaterTag);
 int    IsMasterServer(void);
 void   GetTagValues(const char* orderTag, const char* serialTag,
                     const char* operationTag, const char* partTag,
@@ -280,7 +281,8 @@ void MainProcess(
     const char* runTimeTag,              /* seconds */
     const char* downTimeTag,             /* seconds */
     const char* downFormattedTimeTag,    /* HH:MM (display) */
-    const char* percentageTag
+    const char* percentageTag,
+    const char* progHighWaterTag         /* per-machine high-water tag for CalculateProgress */
 )
 {
     /* Declarations (C89) */
@@ -471,7 +473,7 @@ void MainProcess(
         /* Reset downtime bookkeeping so the new job starts clean */
         set_tag_double_if_valid(downTimeTag,        0.0);
         set_tag_double_if_valid(runTimeTag,         0.0);
-        CalculateProgress_Reset();
+        CalculateProgress_Reset(progHighWaterTag);
         /* NOTE: g_mergeCarryRuntimeSeconds / g_mergeCarryDowntimeSeconds are NOT
            reset here.  They are already cleared by remember_archived_row() after a
            successful archive write, and by the !matchesLast branch above when the
@@ -493,7 +495,8 @@ void MainProcess(
 
         /* Initial % and planned end day (anchored) */
         CalculateProgress(startFormattedTimeTag, startFormattedDateTag, estDurationTag,
-                          downTimeTag, percentageTag, formattedTimeTag, formattedDayTag, runTimeTag);
+                          downTimeTag, percentageTag, formattedTimeTag, formattedDayTag, runTimeTag,
+                          progHighWaterTag);
     }
     else {
         /* ----- Same job: accumulate runtime slice & refresh % ----- */
@@ -523,7 +526,8 @@ void MainProcess(
         CalculateProgress(startFormattedTimeTag, startFormattedDateTag, estDurationTag,
                           downTimeTag, percentageTag,
                           formattedTimeTag,
-                          formattedDayTag, runTimeTag);
+                          formattedDayTag, runTimeTag,
+                          progHighWaterTag);
     }
 
     /* HH:MM live displays */
