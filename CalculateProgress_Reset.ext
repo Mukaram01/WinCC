@@ -1,5 +1,7 @@
 void CalculateProgress_Reset(void) {
-    static double s_progHighWater = 0.0;
-    /* Reset the high-water mark so the next job starts from zero. */
+    /* Reset the monotonic floor so the next job's percentage starts from zero.
+       s_progHighWater is a module-level global defined in CalculateProgress.c;
+       declared extern here so this separate action file can write to it. */
+    extern double s_progHighWater;
     s_progHighWater = 0.0;
 }

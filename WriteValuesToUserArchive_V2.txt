@@ -117,7 +117,6 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
     int ok;
     int writeOk = 0;
     int hasExisting = 0;
-    int duplicateCount = 0;
 
     char existingMachine[64];
     char existingOrder[64];
@@ -261,34 +260,66 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
             SetTagWord("ArchiveInsertFailed", 1);
         }
 
-        /* Post-load duplicate check query: fail batch when duplicates exist */
-        if (uaArchiveMoveFirst(hArc)) {
-            do {
-                char chkMachine[64]   = "";
-                char chkOrder[64]     = "";
-                char chkSerial[64]    = "";
-                char chkOperation[64] = "";
-                char chkPart[64]      = "";
-                char chkStartDate[16] = "";
+        /* Post-write deduplication: scan for any extra matching rows and delete
+           them, keeping only the first row (which was already updated/inserted
+           above).  This handles pre-existing duplicate rows left by earlier bugs
+           as well as any race-created duplicates.
+           Row identity uses field 0 (the archive primary key) read via
+           uaArchiveGetFieldValueLong, deleted with uaArchiveDelete("ID=N"). */
+        {
+            int matchCount  = 0;
+            int deleteCount = 0;
+            if (uaArchiveMoveFirst(hArc)) {
+                do {
+                    char chkMachine[64]   = "";
+                    char chkOrder[64]     = "";
+                    char chkSerial[64]    = "";
+                    char chkOperation[64] = "";
+                    char chkPart[64]      = "";
+                    char chkStartDate[16] = "";
+                    long dupID            = 0L;
+                    char whereClause[32]  = "";
 
-                uaArchiveGetFieldValueString(hArc, F_MACHINE,    chkMachine,    sizeof(chkMachine));
-                uaArchiveGetFieldValueString(hArc, F_ORDER,      chkOrder,      sizeof(chkOrder));
-                uaArchiveGetFieldValueString(hArc, F_SERIAL,     chkSerial,     sizeof(chkSerial));
-                uaArchiveGetFieldValueString(hArc, F_OPERATION,  chkOperation,  sizeof(chkOperation));
-                uaArchiveGetFieldValueString(hArc, F_PART,       chkPart,       sizeof(chkPart));
-                uaArchiveGetFieldValueString(hArc, F_START_DATE, chkStartDate,  sizeof(chkStartDate));
+                    uaArchiveGetFieldValueString(hArc, F_MACHINE,    chkMachine,    sizeof(chkMachine));
+                    uaArchiveGetFieldValueString(hArc, F_ORDER,      chkOrder,      sizeof(chkOrder));
+                    uaArchiveGetFieldValueString(hArc, F_SERIAL,     chkSerial,     sizeof(chkSerial));
+                    uaArchiveGetFieldValueString(hArc, F_OPERATION,  chkOperation,  sizeof(chkOperation));
+                    uaArchiveGetFieldValueString(hArc, F_PART,       chkPart,       sizeof(chkPart));
+                    uaArchiveGetFieldValueString(hArc, F_START_DATE, chkStartDate,  sizeof(chkStartDate));
 
-                if (key_matches(machineName, orderNumber, serialNumber, operationNumber, partNumber, startDate,
-                                chkMachine, chkOrder, chkSerial, chkOperation, chkPart, chkStartDate)) {
-                    ++duplicateCount;
-                }
-            } while (uaArchiveMoveNext(hArc));
-        }
+                    if (key_matches(machineName, orderNumber, serialNumber, operationNumber, partNumber, startDate,
+                                    chkMachine, chkOrder, chkSerial, chkOperation, chkPart, chkStartDate)) {
+                        ++matchCount;
+                        if (matchCount > 1) {
+                            /* Extra duplicate: read its primary key and delete it */
+                            if (uaArchiveGetFieldValueLong(hArc, 0, &dupID)) {
+                                sprintf(whereClause, "ID=%ld", dupID);
+                                if (uaArchiveDelete(hArc, whereClause)) {
+                                    ++deleteCount;
+                                    printf("WriteValuesToUserArchive_V2: deleted duplicate row ID=%ld\n", dupID);
+                                } else {
+                                    printf("WriteValuesToUserArchive_V2: delete duplicate failed ID=%ld err=%d\n",
+                                           dupID, uaGetLastError());
+                                }
+                            } else {
+                                printf("WriteValuesToUserArchive_V2: cannot read PK for duplicate row, skipping delete\n");
+                            }
+                        }
+                    }
+                } while (uaArchiveMoveNext(hArc));
+            }
 
-        if (duplicateCount > 1) {
-            printf("WriteValuesToUserArchive_V2: DUPLICATE check FAILED duplicateCount=%d\n", duplicateCount);
-            SetTagWord("ArchiveDuplicateCheckFailed", 1);
-            SetTagWord("ArchiveInsertFailed", 1);
+            if (deleteCount > 0) {
+                printf("WriteValuesToUserArchive_V2: purged %d duplicate row(s) machine=%s order=%s\n",
+                       deleteCount, nz(machineName), nz(orderNumber));
+            }
+            /* Flag residual duplicates that could not be deleted */
+            if (matchCount > 1 && deleteCount < matchCount - 1) {
+                printf("WriteValuesToUserArchive_V2: dedup issue matchCount=%d deleteCount=%d\n",
+                       matchCount, deleteCount);
+                SetTagWord("ArchiveDuplicateCheckFailed", 1);
+                SetTagWord("ArchiveInsertFailed", 1);
+            }
         }
 
         uaArchiveClose(hArc);

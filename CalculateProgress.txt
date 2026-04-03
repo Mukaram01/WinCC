@@ -16,8 +16,10 @@ static int parse_ddmmyyyy(const char* s,int* d,int* mo,int* y){
 }
 
 /* Monotonic floor for prog — prevents percentage from decreasing mid-job after
-   a cycle counter anomaly reset.  Reset by CalculateProgress_Reset() on new job. */
-static double s_progHighWater = 0.0;
+   a cycle counter anomaly reset.  Reset by CalculateProgress_Reset() on new job.
+   Declared as a module-level global (not static) so CalculateProgress_Reset() in
+   its own action file can reference it via extern. */
+double s_progHighWater = 0.0;
 
 void CalculateProgress(const char* startTimeTag,
                        const char* startDateTag,
