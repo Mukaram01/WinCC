@@ -27,6 +27,7 @@
 #define TAG_STR_LEN             256
 #define MIN_RUNTIME_THRESHOLD   300   /* seconds */
 #define MERGE_RUNTIME_THRESHOLD  60   /* seconds; slices below this re-use last archive row */
+#define CYCLE_ANOMALY_NEGATIVE_THRESHOLD (-1.0) /* seconds; ignore sub-1-s float jitter */
 
 /* ---------- Forward declarations (keep signatures exactly as shown) ---------- */
 double AccumulateRuntime(double currentCycleTime, double* previousCycleTime, double* totalRuntime);
@@ -336,8 +337,11 @@ void MainProcess(
                curOrder, curSerial, curOp, curPart, isNew);
     }
 
-    /* Sanity-check the cycle counter before using it */
-    if ((curCycle - prevCycle) < 0.0 || (curCycle - prevCycle) > MAX_CYCLE_DELTA) {
+    /* Sanity-check the cycle counter before using it.
+       Use a small negative threshold (not 0) to avoid treating sub-second
+       floating-point jitter as a genuine counter anomaly — AccumulateRuntime
+       already ignores negative deltas silently. */
+    if ((curCycle - prevCycle) < CYCLE_ANOMALY_NEGATIVE_THRESHOLD || (curCycle - prevCycle) > MAX_CYCLE_DELTA) {
         /* Counter wrapped or jumped; reset baseline without accumulating */
         printf("MainProcess: cycle counter anomaly (delta=%.2f), resetting baseline\n",
                curCycle - prevCycle);
@@ -493,6 +497,23 @@ void MainProcess(
     }
     else {
         /* ----- Same job: accumulate runtime slice & refresh % ----- */
+
+        /* Guard against a false accumulation on the very first poll after a
+           system start or WinCC restart.  At that point previousCycleTag still
+           holds its default value of 0.0 while currentCycleTag already shows
+           the machine's running counter value (e.g. 30025 s).
+           AccumulateRuntime would compute delta = curCycle - 0 = curCycle and
+           add the machine's entire uptime to totalRt in one step.
+           Fix: detect this "uninitialized baseline" state (prevCycle at or below
+           zero, curCycle positive) and set the baseline without accumulating,
+           so the next poll captures a real incremental delta. */
+        if (prevCycle <= 0.0 && curCycle > 0.0) {
+            printf("MainProcess: initial cycle baseline curCycle=%.2f, setting prevCycle without accumulating\n",
+                   curCycle);
+            prevCycle = curCycle;
+            set_tag_double_if_valid(previousCycleTag, prevCycle);
+        }
+
         totalRt = AccumulateRuntime(curCycle, &prevCycle, &totalRt);
         set_tag_double_if_valid(previousCycleTag, prevCycle);
         set_tag_double_if_valid(totalRuntimeTag,  totalRt);
