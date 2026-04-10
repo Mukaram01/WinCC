@@ -6,18 +6,34 @@
 void GetTagValues(const char* orderTag, const char* serialTag, const char* operationTag, const char* partTag,
                   char* orderValue, char* serialValue, char* operationValue, char* partValue)
 {
-    const char* ord = GetTagChar(orderTag);
-    const char* ser = GetTagChar(serialTag);
-    const char* opr = GetTagChar(operationTag);
-    const char* prt = GetTagChar(partTag);
-
     if (orderValue) orderValue[0] = '\0';
     if (serialValue) serialValue[0] = '\0';
     if (operationValue) operationValue[0] = '\0';
     if (partValue) partValue[0] = '\0';
 
-    if (orderValue) { strncpy(orderValue,     ord ? ord : "", TAG_STR_LEN - 1);     orderValue[TAG_STR_LEN - 1] = '\0'; }
-    if (serialValue) { strncpy(serialValue,    ser ? ser : "", TAG_STR_LEN - 1);     serialValue[TAG_STR_LEN - 1] = '\0'; }
-    if (operationValue) { strncpy(operationValue, opr ? opr : "", TAG_STR_LEN - 1);     operationValue[TAG_STR_LEN - 1] = '\0'; }
-    if (partValue) { strncpy(partValue,      prt ? prt : "", TAG_STR_LEN - 1);     partValue[TAG_STR_LEN - 1] = '\0'; }
+    /* IMPORTANT:
+       GetTagChar() returns a pointer to a shared WinCC buffer that is
+       overwritten by the next GetTagChar() call. Copy each value
+       immediately after reading to avoid all outputs collapsing to the
+       last-read tag value. */
+    if (orderValue) {
+        const char* ord = GetTagChar(orderTag);
+        strncpy(orderValue, ord ? ord : "", TAG_STR_LEN - 1);
+        orderValue[TAG_STR_LEN - 1] = '\0';
+    }
+    if (serialValue) {
+        const char* ser = GetTagChar(serialTag);
+        strncpy(serialValue, ser ? ser : "", TAG_STR_LEN - 1);
+        serialValue[TAG_STR_LEN - 1] = '\0';
+    }
+    if (operationValue) {
+        const char* opr = GetTagChar(operationTag);
+        strncpy(operationValue, opr ? opr : "", TAG_STR_LEN - 1);
+        operationValue[TAG_STR_LEN - 1] = '\0';
+    }
+    if (partValue) {
+        const char* prt = GetTagChar(partTag);
+        strncpy(partValue, prt ? prt : "", TAG_STR_LEN - 1);
+        partValue[TAG_STR_LEN - 1] = '\0';
+    }
 }
