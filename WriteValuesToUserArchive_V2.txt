@@ -38,6 +38,28 @@
 /* Safe fallback for NULL strings */
 static const char* nz(const char* s) { return s ? s : ""; }
 
+static void log_write_key_context(const char* prefix,
+                                  int err,
+                                  const char* machineName,
+                                  const char* orderNumber,
+                                  const char* serialNumber,
+                                  const char* operationNumber,
+                                  const char* partNumber,
+                                  const char* startDate,
+                                  const char* startTime)
+{
+    printf("%s err=%d key={machine=%s, order=%s, serial=%s, operation=%s, part=%s, startDate=%s, startTime=%s}\n",
+           prefix,
+           err,
+           nz(machineName),
+           nz(orderNumber),
+           nz(serialNumber),
+           nz(operationNumber),
+           nz(partNumber),
+           nz(startDate),
+           nz(startTime));
+}
+
 static int parse_hhmm_seconds(const char* text, double* secondsOut)
 {
     const char* p;
@@ -236,8 +258,34 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
                     uaArchiveSetFieldValueString(hArc, F_END_DATE,      nz(plannedEndDate));
                     uaArchiveSetFieldValueString(hArc, F_END_TIME,      nz(plannedEndTime));
 
+                    /* API does not expose per-field set status here; log payload lengths
+                       so truncation/schema mismatch is diagnosable when update fails. */
+                    printf("WriteValuesToUserArchive_V2: update payload lengths machine=%u order=%u serial=%u op=%u part=%u run=%u down=%u startDate=%u startTime=%u endDate=%u endTime=%u\n",
+                           (unsigned)strlen(nz(machineName)),
+                           (unsigned)strlen(nz(orderNumber)),
+                           (unsigned)strlen(nz(serialNumber)),
+                           (unsigned)strlen(nz(operationNumber)),
+                           (unsigned)strlen(nz(partNumber)),
+                           (unsigned)strlen(mergedRun),
+                           (unsigned)strlen(mergedDown),
+                           (unsigned)strlen(nz(existingStartDate[0] ? existingStartDate : startDate)),
+                           (unsigned)strlen(nz(existingStartTime[0] ? existingStartTime : startTime)),
+                           (unsigned)strlen(nz(plannedEndDate)),
+                           (unsigned)strlen(nz(plannedEndTime)));
+
                     writeOk = uaArchiveUpdate(hArc);
                     printf("WriteValuesToUserArchive_V2: uaArchiveUpdate result=%d\n", writeOk);
+                    if (!writeOk) {
+                        log_write_key_context("WriteValuesToUserArchive_V2: uaArchiveUpdate FAILED",
+                                              uaGetLastError(),
+                                              machineName,
+                                              orderNumber,
+                                              serialNumber,
+                                              operationNumber,
+                                              partNumber,
+                                              existingStartDate[0] ? existingStartDate : startDate,
+                                              existingStartTime[0] ? existingStartTime : startTime);
+                    }
                     break;
                 }
             } while (uaArchiveMoveNext(hArc));
@@ -257,13 +305,56 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
             uaArchiveSetFieldValueString(hArc, F_END_DATE,      nz(plannedEndDate));
             uaArchiveSetFieldValueString(hArc, F_END_TIME,      nz(plannedEndTime));
 
+            /* API does not expose per-field set status here; log payload lengths
+               so truncation/schema mismatch is diagnosable when insert fails. */
+            printf("WriteValuesToUserArchive_V2: insert payload lengths machine=%u order=%u serial=%u op=%u part=%u run=%u down=%u startDate=%u startTime=%u endDate=%u endTime=%u\n",
+                   (unsigned)strlen(nz(machineName)),
+                   (unsigned)strlen(nz(orderNumber)),
+                   (unsigned)strlen(nz(serialNumber)),
+                   (unsigned)strlen(nz(operationNumber)),
+                   (unsigned)strlen(nz(partNumber)),
+                   (unsigned)strlen(nz(runtimeHHMM)),
+                   (unsigned)strlen(nz(downtimeHHMM)),
+                   (unsigned)strlen(nz(startDate)),
+                   (unsigned)strlen(nz(startTime)),
+                   (unsigned)strlen(nz(plannedEndDate)),
+                   (unsigned)strlen(nz(plannedEndTime)));
+
             writeOk = uaArchiveInsert(hArc);
             printf("WriteValuesToUserArchive_V2: uaArchiveInsert result=%d\n", writeOk);
+            if (!writeOk) {
+                log_write_key_context("WriteValuesToUserArchive_V2: uaArchiveInsert FAILED",
+                                      uaGetLastError(),
+                                      machineName,
+                                      orderNumber,
+                                      serialNumber,
+                                      operationNumber,
+                                      partNumber,
+                                      startDate,
+                                      startTime);
+            }
         }
 
         if (!writeOk) {
-            printf("WriteValuesToUserArchive_V2: write FAILED (hasExisting=%d), setting ArchiveInsertFailed\n",
-                   hasExisting);
+            log_write_key_context("WriteValuesToUserArchive_V2: write FAILED",
+                                  uaGetLastError(),
+                                  machineName,
+                                  orderNumber,
+                                  serialNumber,
+                                  operationNumber,
+                                  partNumber,
+                                  startDate,
+                                  startTime);
+            printf("WriteValuesToUserArchive_V2: write FAILED (hasExisting=%d, err=%d, key={machine=%s, order=%s, serial=%s, operation=%s, part=%s, startDate=%s, startTime=%s}), setting ArchiveInsertFailed\n",
+                   hasExisting,
+                   uaGetLastError(),
+                   nz(machineName),
+                   nz(orderNumber),
+                   nz(serialNumber),
+                   nz(operationNumber),
+                   nz(partNumber),
+                   nz(startDate),
+                   nz(startTime));
             SetTagWord("ArchiveInsertFailed", 1);
         }
 
