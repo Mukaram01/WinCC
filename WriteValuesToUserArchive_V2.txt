@@ -236,13 +236,14 @@ static int relaxed_key_matches_no_serial_no_startdate(const char* machineName,
            strcmp(nz(partNumber),     nz(recPart))      == 0;
 }
 
-static void log_possible_duplicate_under_archive_key(UAHARCHIVE hArc,
-                                                     const char* machineName,
-                                                     const char* orderNumber,
-                                                     const char* operationNumber,
-                                                     const char* partNumber)
+static int find_relaxed_candidate_under_archive_key(UAHARCHIVE hArc,
+                                                    const char* machineName,
+                                                    const char* orderNumber,
+                                                    const char* operationNumber,
+                                                    const char* partNumber,
+                                                    long* candidateRowIDOut)
 {
-    if (!hArc) return;
+    if (!hArc) return 0;
 
     if (uaArchiveMoveFirst(hArc)) {
         do {
@@ -275,12 +276,14 @@ static void log_possible_duplicate_under_archive_key(UAHARCHIVE hArc,
                        chkPart,
                        chkStartDate,
                        chkStartTime);
-                return;
+                if (candidateRowIDOut) *candidateRowIDOut = rowID;
+                return 1;
             }
         } while (uaArchiveMoveNext(hArc));
     }
 
     printf("WriteValuesToUserArchive_V2: possible duplicate under archive key: none found in relaxed search\n");
+    return 0;
 }
 
 void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvents" */
@@ -485,6 +488,8 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
             writeOk = uaArchiveInsert(hArc);
             printf("WriteValuesToUserArchive_V2: uaArchiveInsert result=%d\n", writeOk);
             if (!writeOk) {
+                int fallbackUpsertOk = 0;
+                long fallbackRowID = -1L;
                 log_write_key_context("WriteValuesToUserArchive_V2: uaArchiveInsert FAILED",
                                       uaGetLastError(),
                                       machineName,
@@ -494,11 +499,35 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
                                       partNumber,
                                       startDate,
                                       startTime);
-                log_possible_duplicate_under_archive_key(hArc,
-                                                        machineName,
-                                                        orderNumber,
-                                                        operationNumber,
-                                                        partNumber);
+                if (find_relaxed_candidate_under_archive_key(hArc,
+                                                             machineName,
+                                                             orderNumber,
+                                                             operationNumber,
+                                                             partNumber,
+                                                             &fallbackRowID)) {
+                    uaArchiveSetFieldValueString(hArc, F_MACHINE,       nz(machineName));
+                    uaArchiveSetFieldValueString(hArc, F_ORDER,         nz(orderNumber));
+                    uaArchiveSetFieldValueString(hArc, F_SERIAL,        nz(serialNumber));
+                    uaArchiveSetFieldValueString(hArc, F_OPERATION,     nz(operationNumber));
+                    uaArchiveSetFieldValueString(hArc, F_PART,          nz(partNumber));
+                    uaArchiveSetFieldValueString(hArc, F_RUNTIME_HHMM,  nz(runtimeHHMM));
+                    uaArchiveSetFieldValueString(hArc, F_DOWNTIME_HHMM, nz(downtimeHHMM));
+                    uaArchiveSetFieldValueString(hArc, F_START_DATE,    nz(startDate));
+                    uaArchiveSetFieldValueString(hArc, F_START_TIME,    nz(startTime));
+                    uaArchiveSetFieldValueString(hArc, F_END_DATE,      nz(plannedEndDate));
+                    uaArchiveSetFieldValueString(hArc, F_END_TIME,      nz(plannedEndTime));
+
+                    fallbackUpsertOk = uaArchiveUpdate(hArc);
+                    if (fallbackUpsertOk) {
+                        writeOk = 1;
+                        printf("WriteValuesToUserArchive_V2: fallback-upsert used (insert->update) rowID=%ld\n",
+                               fallbackRowID);
+                    } else {
+                        printf("WriteValuesToUserArchive_V2: fallback-upsert update FAILED rowID=%ld err=%d\n",
+                               fallbackRowID,
+                               uaGetLastError());
+                    }
+                }
             }
         }
 
