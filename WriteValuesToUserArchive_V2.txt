@@ -112,20 +112,79 @@ static int key_matches(const char* machineName,
                        const char* serialNumber,
                        const char* operationNumber,
                        const char* partNumber,
-                       const char* startDate,
                        const char* recMachine,
                        const char* recOrder,
                        const char* recSerial,
                        const char* recOperation,
-                       const char* recPart,
-                       const char* recStartDate)
+                       const char* recPart)
 {
     return strcmp(nz(machineName),    nz(recMachine))    == 0 &&
            strcmp(nz(orderNumber),    nz(recOrder))      == 0 &&
            strcmp(nz(serialNumber),   nz(recSerial))     == 0 &&
            strcmp(nz(operationNumber),nz(recOperation))  == 0 &&
-           strcmp(nz(partNumber),     nz(recPart))       == 0 &&
-           strcmp(nz(startDate),      nz(recStartDate))  == 0;
+           strcmp(nz(partNumber),     nz(recPart))       == 0;
+}
+
+static int relaxed_key_matches_no_serial_no_startdate(const char* machineName,
+                                                      const char* orderNumber,
+                                                      const char* operationNumber,
+                                                      const char* partNumber,
+                                                      const char* recMachine,
+                                                      const char* recOrder,
+                                                      const char* recOperation,
+                                                      const char* recPart)
+{
+    return strcmp(nz(machineName),    nz(recMachine))   == 0 &&
+           strcmp(nz(orderNumber),    nz(recOrder))     == 0 &&
+           strcmp(nz(operationNumber),nz(recOperation)) == 0 &&
+           strcmp(nz(partNumber),     nz(recPart))      == 0;
+}
+
+static void log_possible_duplicate_under_archive_key(UAHARCHIVE hArc,
+                                                     const char* machineName,
+                                                     const char* orderNumber,
+                                                     const char* operationNumber,
+                                                     const char* partNumber)
+{
+    if (!hArc) return;
+
+    if (uaArchiveMoveFirst(hArc)) {
+        do {
+            char chkMachine[64]   = "";
+            char chkOrder[64]     = "";
+            char chkSerial[64]    = "";
+            char chkOperation[64] = "";
+            char chkPart[64]      = "";
+            char chkStartDate[16] = "";
+            char chkStartTime[16] = "";
+            long rowID = -1L;
+
+            uaArchiveGetFieldValueString(hArc, F_MACHINE,    chkMachine,    sizeof(chkMachine));
+            uaArchiveGetFieldValueString(hArc, F_ORDER,      chkOrder,      sizeof(chkOrder));
+            uaArchiveGetFieldValueString(hArc, F_SERIAL,     chkSerial,     sizeof(chkSerial));
+            uaArchiveGetFieldValueString(hArc, F_OPERATION,  chkOperation,  sizeof(chkOperation));
+            uaArchiveGetFieldValueString(hArc, F_PART,       chkPart,       sizeof(chkPart));
+            uaArchiveGetFieldValueString(hArc, F_START_DATE, chkStartDate,  sizeof(chkStartDate));
+            uaArchiveGetFieldValueString(hArc, F_START_TIME, chkStartTime,  sizeof(chkStartTime));
+            if (!uaArchiveGetFieldValueLong(hArc, 0, &rowID)) rowID = -1L;
+
+            if (relaxed_key_matches_no_serial_no_startdate(machineName, orderNumber, operationNumber, partNumber,
+                                                           chkMachine, chkOrder, chkOperation, chkPart)) {
+                printf("WriteValuesToUserArchive_V2: possible duplicate under archive key rowID=%ld machine=%s order=%s serial=%s op=%s part=%s startDate=%s startTime=%s\n",
+                       rowID,
+                       chkMachine,
+                       chkOrder,
+                       chkSerial,
+                       chkOperation,
+                       chkPart,
+                       chkStartDate,
+                       chkStartTime);
+                return;
+            }
+        } while (uaArchiveMoveNext(hArc));
+    }
+
+    printf("WriteValuesToUserArchive_V2: possible duplicate under archive key: none found in relaxed search\n");
 }
 
 void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvents" */
@@ -200,10 +259,9 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
         return;
     }
     {
-        /* Deterministic de-dupe key:
-           MachineName + OrderNumber + SerialNumber + OperationNumber + PartNumber + StartDate
-           StartDate is included so that the same job on a different production day
-           always creates a new row rather than updating a historical entry. */
+        /* Deterministic de-dupe key (must match Archive Designer unique fields):
+           MachineName + OrderNumber + SerialNumber + OperationNumber + PartNumber
+           NOTE: StartDate is intentionally NOT part of this key. */
         if (uaArchiveMoveFirst(hArc)) {
             do {
                 existingMachine[0]   = '\0';
@@ -211,25 +269,25 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
                 existingSerial[0]    = '\0';
                 existingOperation[0] = '\0';
                 existingPart[0]      = '\0';
-                existingStartDate[0] = '\0';
 
                 uaArchiveGetFieldValueString(hArc, F_MACHINE,    existingMachine,    sizeof(existingMachine));
                 uaArchiveGetFieldValueString(hArc, F_ORDER,      existingOrder,      sizeof(existingOrder));
                 uaArchiveGetFieldValueString(hArc, F_SERIAL,     existingSerial,     sizeof(existingSerial));
                 uaArchiveGetFieldValueString(hArc, F_OPERATION,  existingOperation,  sizeof(existingOperation));
                 uaArchiveGetFieldValueString(hArc, F_PART,       existingPart,       sizeof(existingPart));
-                uaArchiveGetFieldValueString(hArc, F_START_DATE, existingStartDate,  sizeof(existingStartDate));
 
-                if (key_matches(machineName, orderNumber, serialNumber, operationNumber, partNumber, startDate,
-                                existingMachine, existingOrder, existingSerial, existingOperation, existingPart, existingStartDate)) {
+                if (key_matches(machineName, orderNumber, serialNumber, operationNumber, partNumber,
+                                existingMachine, existingOrder, existingSerial, existingOperation, existingPart)) {
                     hasExisting = 1;
 
                     existingRun[0]       = '\0';
                     existingDown[0]      = '\0';
+                    existingStartDate[0] = '\0';
                     existingStartTime[0] = '\0';
 
                     uaArchiveGetFieldValueString(hArc, F_RUNTIME_HHMM,  existingRun,       sizeof(existingRun));
                     uaArchiveGetFieldValueString(hArc, F_DOWNTIME_HHMM, existingDown,      sizeof(existingDown));
+                    uaArchiveGetFieldValueString(hArc, F_START_DATE,    existingStartDate, sizeof(existingStartDate));
                     uaArchiveGetFieldValueString(hArc, F_START_TIME,    existingStartTime, sizeof(existingStartTime));
 
                     if (!parse_hhmm_seconds(existingRun, &oldRunSeconds)) oldRunSeconds = 0.0;
@@ -332,6 +390,11 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
                                       partNumber,
                                       startDate,
                                       startTime);
+                log_possible_duplicate_under_archive_key(hArc,
+                                                        machineName,
+                                                        orderNumber,
+                                                        operationNumber,
+                                                        partNumber);
             }
         }
 
@@ -387,7 +450,6 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
                     char chkSerial[64]    = "";
                     char chkOperation[64] = "";
                     char chkPart[64]      = "";
-                    char chkStartDate[16] = "";
                     long rowID = -1L;
 
                     uaArchiveGetFieldValueString(hArc, F_MACHINE,    chkMachine,    sizeof(chkMachine));
@@ -395,10 +457,9 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
                     uaArchiveGetFieldValueString(hArc, F_SERIAL,     chkSerial,     sizeof(chkSerial));
                     uaArchiveGetFieldValueString(hArc, F_OPERATION,  chkOperation,  sizeof(chkOperation));
                     uaArchiveGetFieldValueString(hArc, F_PART,       chkPart,       sizeof(chkPart));
-                    uaArchiveGetFieldValueString(hArc, F_START_DATE, chkStartDate,  sizeof(chkStartDate));
 
-                    if (key_matches(machineName, orderNumber, serialNumber, operationNumber, partNumber, startDate,
-                                    chkMachine, chkOrder, chkSerial, chkOperation, chkPart, chkStartDate)) {
+                    if (key_matches(machineName, orderNumber, serialNumber, operationNumber, partNumber,
+                                    chkMachine, chkOrder, chkSerial, chkOperation, chkPart)) {
                         if (!uaArchiveGetFieldValueLong(hArc, 0, &rowID)) rowID = -1L;
 
                         if (survivorID == -1L) {
