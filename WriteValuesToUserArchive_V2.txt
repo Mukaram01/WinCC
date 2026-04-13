@@ -1,4 +1,5 @@
 /* WriteValuesToUserArchive_V2.c — ProductionEvents writer (human-first)
+   Deployed ProductionEvents schema (validated at runtime before writes):
    Archive field order (1-based):
      1  MachineName       (String)
      2  OrderNumber       (String)
@@ -38,6 +39,101 @@
 /* Safe fallback for NULL strings */
 static const char* nz(const char* s) { return s ? s : ""; }
 
+
+
+/* Expected deployed schema for ProductionEvents. */
+#define EXPECTED_FIELD_COUNT 11
+
+/* Legacy layout still seen on older deployments (for mismatch diagnostics only):
+   1 MachineName, 2 OrderNumber, 3 SerialNumber, 4 OperationNumber, 5 PartNumber,
+   6 RuntimeHHMM, 7 StartDate, 8 StartTime, 9 PlannedEndDate, 10 PlannedEndTime. */
+#define LEGACY_FIELD_COUNT 10
+#define L10_F_START_DATE   7
+#define L10_F_START_TIME   8
+#define L10_F_END_DATE     9
+#define L10_F_END_TIME     10
+
+static int g_schema_checked = 0;
+static int g_schema_valid   = 0;
+
+static int looks_like_hhmm(const char* s)
+{
+    int hh = 0;
+    int mm = 0;
+    if (!s) return 0;
+    if (s[0]<'0'||s[0]>'9'||s[1]<'0'||s[1]>'9'||s[2]!=':'||
+        s[3]<'0'||s[3]>'9'||s[4]<'0'||s[4]>'9'||s[5]!='\0') return 0;
+    hh = (s[0]-'0')*10 + (s[1]-'0');
+    mm = (s[3]-'0')*10 + (s[4]-'0');
+    return (hh >= 0 && hh <= 99 && mm >= 0 && mm <= 59);
+}
+
+static int looks_like_ddmmyyyy(const char* s)
+{
+    int dd = 0;
+    int mo = 0;
+    if (!s) return 0;
+    if (s[0]<'0'||s[0]>'9'||s[1]<'0'||s[1]>'9'||s[2]!='/'||
+        s[3]<'0'||s[3]>'9'||s[4]<'0'||s[4]>'9'||s[5]!='/'||
+        s[6]<'0'||s[6]>'9'||s[7]<'0'||s[7]>'9'||s[8]<'0'||s[8]>'9'||s[9]<'0'||s[9]>'9'||
+        s[10]!='\0') return 0;
+    dd = (s[0]-'0')*10 + (s[1]-'0');
+    mo = (s[3]-'0')*10 + (s[4]-'0');
+    return (dd >= 1 && dd <= 31 && mo >= 1 && mo <= 12);
+}
+
+static int validate_productionevents_schema(UAHARCHIVE hArc, const char* archiveName)
+{
+    if (g_schema_checked) return g_schema_valid;
+
+    g_schema_checked = 1;
+    g_schema_valid = 1;
+
+    if (uaArchiveMoveFirst(hArc)) {
+        char s11StartDate[16] = "";
+        char s11StartTime[16] = "";
+        char s11EndDate[16]   = "";
+        char s11EndTime[16]   = "";
+
+        char s10StartDate[16] = "";
+        char s10StartTime[16] = "";
+        char s10EndDate[16]   = "";
+        char s10EndTime[16]   = "";
+
+        uaArchiveGetFieldValueString(hArc, F_START_DATE, s11StartDate, sizeof(s11StartDate));
+        uaArchiveGetFieldValueString(hArc, F_START_TIME, s11StartTime, sizeof(s11StartTime));
+        uaArchiveGetFieldValueString(hArc, F_END_DATE,   s11EndDate,   sizeof(s11EndDate));
+        uaArchiveGetFieldValueString(hArc, F_END_TIME,   s11EndTime,   sizeof(s11EndTime));
+
+        uaArchiveGetFieldValueString(hArc, L10_F_START_DATE, s10StartDate, sizeof(s10StartDate));
+        uaArchiveGetFieldValueString(hArc, L10_F_START_TIME, s10StartTime, sizeof(s10StartTime));
+        uaArchiveGetFieldValueString(hArc, L10_F_END_DATE,   s10EndDate,   sizeof(s10EndDate));
+        uaArchiveGetFieldValueString(hArc, L10_F_END_TIME,   s10EndTime,   sizeof(s10EndTime));
+
+        if (!looks_like_ddmmyyyy(s11StartDate) || !looks_like_hhmm(s11StartTime) ||
+            !looks_like_ddmmyyyy(s11EndDate)   || !looks_like_hhmm(s11EndTime)) {
+            int legacyLooksValid = looks_like_ddmmyyyy(s10StartDate) &&
+                                   looks_like_hhmm(s10StartTime) &&
+                                   looks_like_ddmmyyyy(s10EndDate) &&
+                                   looks_like_hhmm(s10EndTime);
+
+            g_schema_valid = 0;
+            if (legacyLooksValid) {
+                printf("WriteValuesToUserArchive_V2: schema mismatch archive=%s expected 11-field layout but deployed data matches legacy %d-field layout (F7=StartDate..F10=PlannedEndTime).\n",
+                       nz(archiveName), LEGACY_FIELD_COUNT);
+            } else {
+                printf("WriteValuesToUserArchive_V2: schema mismatch archive=%s expected 11-field layout (field count=%d, names/order: MachineName,OrderNumber,SerialNumber,OperationNumber,PartNumber,RuntimeHHMM,DowntimeHHMM,StartDate,StartTime,PlannedEndDate,PlannedEndTime); first row does not match expected date/time field positions.\n",
+                       nz(archiveName), EXPECTED_FIELD_COUNT);
+            }
+        }
+    } else {
+        /* Empty archive: cannot infer via first-row values, assume configured schema is correct. */
+        printf("WriteValuesToUserArchive_V2: schema check archive=%s no rows yet; assuming expected %d-field layout.\n",
+               nz(archiveName), EXPECTED_FIELD_COUNT);
+    }
+
+    return g_schema_valid;
+}
 static void log_write_key_context(const char* prefix,
                                   int err,
                                   const char* machineName,
@@ -254,6 +350,14 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
     if (!ok) {
         printf("WriteValuesToUserArchive_V2: uaArchiveOpen FAILED for '%s'\n", archiveName);
         SetTagWord("ArchiveInsertFailed", 1);
+        uaReleaseArchive(hArc);
+        uaDisconnect(hCon);
+        return;
+    }
+
+    if (!validate_productionevents_schema(hArc, archiveName)) {
+        SetTagWord("ArchiveInsertFailed", 1);
+        uaArchiveClose(hArc);
         uaReleaseArchive(hArc);
         uaDisconnect(hCon);
         return;
