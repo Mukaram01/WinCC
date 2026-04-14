@@ -441,8 +441,12 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
                     writeOk = uaArchiveUpdate(hArc);
                     printf("WriteValuesToUserArchive_V2: uaArchiveUpdate result=%d\n", writeOk);
                     if (!writeOk) {
+                        int updateErr = uaGetLastError();
+                        long updateHr = uaGetLastHResult();
+                        printf("WriteValuesToUserArchive_V2: uaArchiveUpdate FAILED err=%d hr=0x%08lX\n",
+                               updateErr, updateHr);
                         log_write_key_context("WriteValuesToUserArchive_V2: uaArchiveUpdate FAILED",
-                                              uaGetLastError(),
+                                              updateErr,
                                               machineName,
                                               orderNumber,
                                               serialNumber,
@@ -485,13 +489,18 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
                    (unsigned)strlen(nz(plannedEndDate)),
                    (unsigned)strlen(nz(plannedEndTime)));
 
+            uaArchiveSetFieldValueLong(hArc, 0, 0L);
             writeOk = uaArchiveInsert(hArc);
             printf("WriteValuesToUserArchive_V2: uaArchiveInsert result=%d\n", writeOk);
             if (!writeOk) {
                 int fallbackUpsertOk = 0;
                 long fallbackRowID = -1L;
+                int insertErr = uaGetLastError();
+                long insertHr = uaGetLastHResult();
+                printf("WriteValuesToUserArchive_V2: uaArchiveInsert FAILED err=%d hr=0x%08lX\n",
+                       insertErr, insertHr);
                 log_write_key_context("WriteValuesToUserArchive_V2: uaArchiveInsert FAILED",
-                                      uaGetLastError(),
+                                      insertErr,
                                       machineName,
                                       orderNumber,
                                       serialNumber,
@@ -523,9 +532,12 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
                         printf("WriteValuesToUserArchive_V2: fallback-upsert used (insert->update) rowID=%ld\n",
                                fallbackRowID);
                     } else {
-                        printf("WriteValuesToUserArchive_V2: fallback-upsert update FAILED rowID=%ld err=%d\n",
+                        int fallbackUpdateErr = uaGetLastError();
+                        long fallbackUpdateHr = uaGetLastHResult();
+                        printf("WriteValuesToUserArchive_V2: fallback-upsert update FAILED rowID=%ld err=%d hr=0x%08lX\n",
                                fallbackRowID,
-                               uaGetLastError());
+                               fallbackUpdateErr,
+                               fallbackUpdateHr);
                     }
                 }
             }
