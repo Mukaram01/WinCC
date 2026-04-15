@@ -9,7 +9,7 @@
                          const char* percentageTag, const char* endTimeTag,
                          const char* endDayTag, const char* progRuntimeTag);
      - CalculateEstimatedEndTime(const char* archiveName, const char* operationTag,
-                                 const char* partTag, const char* resultTag);
+                                 const char* partTag, const char* resultTag) -> ETA seconds;
      - UpdateFormattedTime(const char* sourceTag, const char* targetTag);
      - AccumulateRuntime(double currentCycleTime, double* previousCycleTime, double* totalRuntime);
      - CompareIdentifiers(…);
@@ -38,7 +38,7 @@ void   UpdateFormattedEndTime(const char* startTimeTag,
                               const char* estDurationTag,
                               const char* formattedTimeTag,
                               const char* formattedDayTag);
-void   CalculateEstimatedEndTime(const char* archiveName,
+double CalculateEstimatedEndTime(const char* archiveName,
                                  const char* operationTag,
                                  const char* partTag,
                                  const char* resultTag);
@@ -485,18 +485,24 @@ void MainProcess(
         /* Stamp start once */
         UpdateStartTime(startFormattedTimeTag, startFormattedDateTag);
 
-        /* ETA once (seconds) from numeric history */
-        CalculateEstimatedEndTime(archiveName, currentOperationTag, currentPartTag, estDurationTag);
-        printf("MainProcess: new job ETA=%.2f seconds\n", GetTagDouble(estDurationTag));
+        /* ETA once (seconds) from numeric history.
+           Use the dedicated ProductionEvents archive for history lookup.
+           Read/print the function return value (not an immediate tag readback)
+           so logs cannot show a stale value if WinCC tag propagation lags. */
+        {
+            double etaSecsNew = CalculateEstimatedEndTime(ETA_ARCHIVE, currentOperationTag, currentPartTag, estDurationTag);
+            set_tag_double_if_valid(estDurationTag, etaSecsNew);
+            printf("MainProcess: new job ETA=%.2f seconds\n", etaSecsNew);
+        }
 
         /* Planned end (HH:MM & DD/MM/YYYY) from start date+time + ETA */
         UpdateFormattedEndTime(startFormattedTimeTag, startFormattedDateTag, estDurationTag,
                                formattedTimeTag, formattedDayTag);
 
-        /* Initial % and planned end day (anchored) */
-        CalculateProgress(startFormattedTimeTag, startFormattedDateTag, estDurationTag,
-                          downTimeTag, percentageTag, formattedTimeTag, formattedDayTag, runTimeTag,
-                          progHighWaterTag);
+        /* Initial % should start at 0 for a newly detected job.
+           Calling CalculateProgress immediately can read stale runtime/downtime
+           values in the same scan on some WinCC setups. */
+        set_tag_double_if_valid(percentageTag, 0.0);
     }
     else {
         /* ----- Same job: accumulate runtime slice & refresh % ----- */
