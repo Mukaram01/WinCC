@@ -36,10 +36,10 @@ static void minutesToHHMM(long totalMinutes, char* out, unsigned int outSize);
 static int quarantineRow(const char* quarantineArchiveName, long rowId, const char* payload, const char* reason);
 static void sortDoubles(double* values, int count);
 
-void CalculateEstimatedEndTime(const char* archiveName,
-                               const char* operationTag,
-                               const char* partTag,
-                               const char* resultTag)
+double CalculateEstimatedEndTime(const char* archiveName,
+                                 const char* operationTag,
+                                 const char* partTag,
+                                 const char* resultTag)
 {
     UAHCONNECT hConnect = 0;
     UAHARCHIVE hArchive = 0;
@@ -59,7 +59,7 @@ void CalculateEstimatedEndTime(const char* archiveName,
     if (!archiveName || !*archiveName || !operationTag || !*operationTag || !partTag || !*partTag) {
         printf("CalculateEstimatedEndTime: missing archive/tag args, using default ETA\n");
         SetTagDouble(resultTag, DEFAULT_ETA_SECONDS);
-        return;
+        return DEFAULT_ETA_SECONDS;
     }
 
     copyTrim(operationNumber, sizeof(operationNumber), operationNumberSrc ? operationNumberSrc : "");
@@ -69,7 +69,7 @@ void CalculateEstimatedEndTime(const char* archiveName,
         printf("CalculateEstimatedEndTime: empty operation='%s' or part='%s', using default ETA\n",
                operationNumber, partNumber);
         SetTagDouble(resultTag, DEFAULT_ETA_SECONDS);
-        return;
+        return DEFAULT_ETA_SECONDS;
     }
 
     printf("CalculateEstimatedEndTime: searching archive=%s operation=%s part=%s\n",
@@ -190,6 +190,7 @@ cleanup:
     printf("CalculateEstimatedEndTime: setting ETA=%.2f seconds for operation=%s part=%s\n",
            median, operationNumber, partNumber);
     SetTagDouble(resultTag, median);
+    return median;
 }
 
 static void sortDoubles(double* values, int count)
