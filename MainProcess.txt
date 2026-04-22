@@ -306,10 +306,6 @@ void MainProcess(
     /* ETA history is read from the same archive we write to */
     const char* ETA_ARCHIVE = "ProductionEvents";
 
-    printf("MainProcess: entry machine=%s archive=%s\n",
-           machineName ? machineName : "(null)",
-           archiveName ? archiveName : "(null)");
-
     if (IsMasterServer() != 1) {
         printf("MainProcess: not master server, aborting\n");
         return;
