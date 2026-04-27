@@ -1,17 +1,10 @@
 /* WriteValuesToUserArchive_V2.c — ProductionEvents writer (human-first)
-   Deployed ProductionEvents schema (validated at runtime before writes):
-   Archive field order (1-based):
-     1  MachineName       (String)
-     2  OrderNumber       (String)
-     3  SerialNumber      (String)
-     4  OperationNumber   (String)
-     5  PartNumber        (String)
-     6  RuntimeHHMM       (String, "HH:MM")
-     7  DowntimeHHMM      (String, "HH:MM")
-     8  StartDate         (String, "DD/MM/YYYY")
-     9  StartTime         (String, "HH:MM")
-     10 PlannedEndDate    (String, "DD/MM/YYYY")
-     11 PlannedEndTime    (String, "HH:MM")
+   IMPORTANT: Do not change UserArchive schema, column order, or types.
+   Archive column order (logical):
+     ID (implicit row id / field index 0), MachineName, OrderNumber, SerialNumber,
+     OperationNumber, PartNumber, RuntimeHHMM, DowntimeHHMM, StartDate, StartTime,
+     PlannedEndDate, PlannedEndTime.
+   RuntimeHHMM is the only merged/summed duration field.
 */
 
 #include "apdefap.h"
@@ -38,6 +31,84 @@
 
 /* Safe fallback for NULL strings */
 static const char* nz(const char* s) { return s ? s : ""; }
+static int looks_like_hhmm(const char* s);
+static int looks_like_ddmmyyyy(const char* s);
+
+static void trim_copy(const char* src, char* dst, size_t dstSize)
+{
+    const char* begin;
+    const char* end;
+    size_t len;
+
+    if (!dst || dstSize == 0) return;
+    dst[0] = '\0';
+    if (!src) return;
+
+    begin = src;
+    while (*begin == ' ' || *begin == '\t' || *begin == '\r' || *begin == '\n') ++begin;
+
+    end = begin + strlen(begin);
+    while (end > begin &&
+           (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n')) {
+        --end;
+    }
+
+    len = (size_t)(end - begin);
+    if (len >= dstSize) len = dstSize - 1;
+    if (len > 0) memcpy(dst, begin, len);
+    dst[len] = '\0';
+}
+
+static void make_composite_key(const char* orderNumber,
+                               const char* serialNumber,
+                               const char* operationNumber,
+                               const char* partNumber,
+                               char* out,
+                               size_t outSize)
+{
+    char tOrder[64];
+    char tSerial[64];
+    char tOperation[64];
+    char tPart[64];
+
+    trim_copy(orderNumber, tOrder, sizeof(tOrder));
+    trim_copy(serialNumber, tSerial, sizeof(tSerial));
+    trim_copy(operationNumber, tOperation, sizeof(tOperation));
+    trim_copy(partNumber, tPart, sizeof(tPart));
+
+    if (!out || outSize == 0) return;
+    sprintf(out, "%s|%s|%s|%s", tOrder, tSerial, tOperation, tPart);
+}
+
+static int parse_ddmmyyyy_hhmm_epoch(const char* dateText, const char* timeText, time_t* epochOut)
+{
+    struct tm t;
+    int dd = 0, mo = 0, yy = 0;
+    int hh = 0, mm = 0;
+
+    if (!dateText || !timeText || !epochOut) return 0;
+    if (!looks_like_ddmmyyyy(dateText)) return 0;
+    if (!looks_like_hhmm(timeText)) return 0;
+
+    dd = (dateText[0]-'0')*10 + (dateText[1]-'0');
+    mo = (dateText[3]-'0')*10 + (dateText[4]-'0');
+    yy = (dateText[6]-'0')*1000 + (dateText[7]-'0')*100 + (dateText[8]-'0')*10 + (dateText[9]-'0');
+    hh = (timeText[0]-'0')*10 + (timeText[1]-'0');
+    mm = (timeText[3]-'0')*10 + (timeText[4]-'0');
+
+    if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return 0;
+
+    memset(&t, 0, sizeof(t));
+    t.tm_sec = 0;
+    t.tm_min = mm;
+    t.tm_hour = hh;
+    t.tm_mday = dd;
+    t.tm_mon = mo - 1;
+    t.tm_year = yy - 1900;
+    t.tm_isdst = -1;
+    *epochOut = mktime(&t);
+    return (*epochOut != (time_t)-1);
+}
 
 
 
@@ -203,41 +274,66 @@ static void seconds_to_hhmm(double seconds, char out[16])
     sprintf(out, "%02ld:%02ld", hh, mm);
 }
 
-static int key_matches(const char* machineName,
-                       const char* orderNumber,
+static int key_matches(const char* orderNumber,
                        const char* serialNumber,
                        const char* operationNumber,
                        const char* partNumber,
-                       const char* recMachine,
                        const char* recOrder,
                        const char* recSerial,
                        const char* recOperation,
                        const char* recPart)
 {
-    return strcmp(nz(machineName),    nz(recMachine))    == 0 &&
-           strcmp(nz(orderNumber),    nz(recOrder))      == 0 &&
-           strcmp(nz(serialNumber),   nz(recSerial))     == 0 &&
-           strcmp(nz(operationNumber),nz(recOperation))  == 0 &&
-           strcmp(nz(partNumber),     nz(recPart))       == 0;
+    char inOrder[64];
+    char inSerial[64];
+    char inOperation[64];
+    char inPart[64];
+    char exOrder[64];
+    char exSerial[64];
+    char exOperation[64];
+    char exPart[64];
+
+    trim_copy(orderNumber, inOrder, sizeof(inOrder));
+    trim_copy(serialNumber, inSerial, sizeof(inSerial));
+    trim_copy(operationNumber, inOperation, sizeof(inOperation));
+    trim_copy(partNumber, inPart, sizeof(inPart));
+    trim_copy(recOrder, exOrder, sizeof(exOrder));
+    trim_copy(recSerial, exSerial, sizeof(exSerial));
+    trim_copy(recOperation, exOperation, sizeof(exOperation));
+    trim_copy(recPart, exPart, sizeof(exPart));
+
+    return strcmp(inOrder, exOrder) == 0 &&
+           strcmp(inSerial, exSerial) == 0 &&
+           strcmp(inOperation, exOperation) == 0 &&
+           strcmp(inPart, exPart) == 0;
 }
 
-static int relaxed_key_matches_no_serial_no_startdate(const char* machineName,
-                                                      const char* orderNumber,
+static int relaxed_key_matches_no_serial_no_startdate(const char* orderNumber,
                                                       const char* operationNumber,
                                                       const char* partNumber,
-                                                      const char* recMachine,
                                                       const char* recOrder,
                                                       const char* recOperation,
                                                       const char* recPart)
 {
-    return strcmp(nz(machineName),    nz(recMachine))   == 0 &&
-           strcmp(nz(orderNumber),    nz(recOrder))     == 0 &&
-           strcmp(nz(operationNumber),nz(recOperation)) == 0 &&
-           strcmp(nz(partNumber),     nz(recPart))      == 0;
+    char inOrder[64];
+    char inOperation[64];
+    char inPart[64];
+    char exOrder[64];
+    char exOperation[64];
+    char exPart[64];
+
+    trim_copy(orderNumber, inOrder, sizeof(inOrder));
+    trim_copy(operationNumber, inOperation, sizeof(inOperation));
+    trim_copy(partNumber, inPart, sizeof(inPart));
+    trim_copy(recOrder, exOrder, sizeof(exOrder));
+    trim_copy(recOperation, exOperation, sizeof(exOperation));
+    trim_copy(recPart, exPart, sizeof(exPart));
+
+    return strcmp(inOrder, exOrder) == 0 &&
+           strcmp(inOperation, exOperation) == 0 &&
+           strcmp(inPart, exPart) == 0;
 }
 
 static int find_relaxed_candidate_under_archive_key(UAHARCHIVE hArc,
-                                                    const char* machineName,
                                                     const char* orderNumber,
                                                     const char* operationNumber,
                                                     const char* partNumber,
@@ -265,8 +361,8 @@ static int find_relaxed_candidate_under_archive_key(UAHARCHIVE hArc,
             uaArchiveGetFieldValueString(hArc, F_START_TIME, chkStartTime,  sizeof(chkStartTime));
             if (!uaArchiveGetFieldValueLong(hArc, 0, &rowID)) rowID = -1L;
 
-            if (relaxed_key_matches_no_serial_no_startdate(machineName, orderNumber, operationNumber, partNumber,
-                                                           chkMachine, chkOrder, chkOperation, chkPart)) {
+            if (relaxed_key_matches_no_serial_no_startdate(orderNumber, operationNumber, partNumber,
+                                                           chkOrder, chkOperation, chkPart)) {
                 printf("WriteValuesToUserArchive_V2: possible duplicate under archive key rowID=%ld machine=%s order=%s serial=%s op=%s part=%s startDate=%s startTime=%s\n",
                        rowID,
                        chkMachine,
@@ -314,12 +410,20 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
     char existingDown[16];
     char existingStartDate[16];
     char existingStartTime[16];
+    char existingEndDate[16];
+    char existingEndTime[16];
     char mergedRun[16];
-    char mergedDown[16];
+    char chosenStartDate[16];
+    char chosenStartTime[16];
+    char chosenEndDate[16];
+    char chosenEndTime[16];
+    char compositeKey[256];
     double oldRunSeconds = 0.0;
-    double oldDownSeconds = 0.0;
     double newRunSeconds = 0.0;
-    double newDownSeconds = 0.0;
+    time_t existingStartEpoch = (time_t)-1;
+    time_t incomingStartEpoch = (time_t)-1;
+    time_t existingEndEpoch = (time_t)-1;
+    time_t incomingEndEpoch = (time_t)-1;
 
     if (!archiveName || archiveName[0] == '\0') {
         printf("WriteValuesToUserArchive_V2: archiveName is null/empty, aborting\n");
@@ -331,6 +435,23 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
            nz(operationNumber), nz(partNumber), nz(runtimeHHMM), nz(downtimeHHMM));
     printf("WriteValuesToUserArchive_V2: startDate=%s startTime=%s endDate=%s endTime=%s\n",
            nz(startDate), nz(startTime), nz(plannedEndDate), nz(plannedEndTime));
+    make_composite_key(orderNumber, serialNumber, operationNumber, partNumber, compositeKey, sizeof(compositeKey));
+
+    if (!parse_hhmm_seconds(nz(runtimeHHMM), &newRunSeconds)) {
+        printf("WriteValuesToUserArchive_V2: invalid runtime - skipping row key=%s runtime=%s\n",
+               compositeKey, nz(runtimeHHMM));
+        return;
+    }
+    if (!parse_ddmmyyyy_hhmm_epoch(nz(startDate), nz(startTime), &incomingStartEpoch)) {
+        printf("WriteValuesToUserArchive_V2: invalid start date/time - skipping row key=%s startDate=%s startTime=%s\n",
+               compositeKey, nz(startDate), nz(startTime));
+        return;
+    }
+    if (!parse_ddmmyyyy_hhmm_epoch(nz(plannedEndDate), nz(plannedEndTime), &incomingEndEpoch)) {
+        printf("WriteValuesToUserArchive_V2: invalid planned end date/time - skipping row key=%s endDate=%s endTime=%s\n",
+               compositeKey, nz(plannedEndDate), nz(plannedEndTime));
+        return;
+    }
 
     /* Connect */
     ok = uaConnect(&hCon);
@@ -366,9 +487,9 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
         return;
     }
     {
-        /* Deterministic de-dupe key (must match Archive Designer unique fields):
-           MachineName + OrderNumber + SerialNumber + OperationNumber + PartNumber
-           NOTE: StartDate is intentionally NOT part of this key. */
+        /* Deterministic merge key:
+           OrderNumber + SerialNumber + OperationNumber + PartNumber
+           NOTE: MachineName and timestamps are intentionally NOT part of this key. */
         if (uaArchiveMoveFirst(hArc)) {
             do {
                 existingMachine[0]   = '\0';
@@ -383,60 +504,86 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
                 uaArchiveGetFieldValueString(hArc, F_OPERATION,  existingOperation,  sizeof(existingOperation));
                 uaArchiveGetFieldValueString(hArc, F_PART,       existingPart,       sizeof(existingPart));
 
-                if (key_matches(machineName, orderNumber, serialNumber, operationNumber, partNumber,
-                                existingMachine, existingOrder, existingSerial, existingOperation, existingPart)) {
+                if (key_matches(orderNumber, serialNumber, operationNumber, partNumber,
+                                existingOrder, existingSerial, existingOperation, existingPart)) {
                     hasExisting = 1;
 
                     existingRun[0]       = '\0';
                     existingDown[0]      = '\0';
                     existingStartDate[0] = '\0';
                     existingStartTime[0] = '\0';
+                    existingEndDate[0]   = '\0';
+                    existingEndTime[0]   = '\0';
 
                     uaArchiveGetFieldValueString(hArc, F_RUNTIME_HHMM,  existingRun,       sizeof(existingRun));
                     uaArchiveGetFieldValueString(hArc, F_DOWNTIME_HHMM, existingDown,      sizeof(existingDown));
                     uaArchiveGetFieldValueString(hArc, F_START_DATE,    existingStartDate, sizeof(existingStartDate));
                     uaArchiveGetFieldValueString(hArc, F_START_TIME,    existingStartTime, sizeof(existingStartTime));
+                    uaArchiveGetFieldValueString(hArc, F_END_DATE,      existingEndDate,   sizeof(existingEndDate));
+                    uaArchiveGetFieldValueString(hArc, F_END_TIME,      existingEndTime,   sizeof(existingEndTime));
 
                     if (!parse_hhmm_seconds(existingRun, &oldRunSeconds)) oldRunSeconds = 0.0;
-                    if (!parse_hhmm_seconds(existingDown, &oldDownSeconds)) oldDownSeconds = 0.0;
-                    if (!parse_hhmm_seconds(nz(runtimeHHMM), &newRunSeconds)) newRunSeconds = 0.0;
-                    if (!parse_hhmm_seconds(nz(downtimeHHMM), &newDownSeconds)) newDownSeconds = 0.0;
-
                     seconds_to_hhmm(oldRunSeconds + newRunSeconds, mergedRun);
-                    seconds_to_hhmm(oldDownSeconds + newDownSeconds, mergedDown);
+
+                    if (!parse_ddmmyyyy_hhmm_epoch(existingStartDate, existingStartTime, &existingStartEpoch)) {
+                        existingStartEpoch = (time_t)-1;
+                    }
+                    if (!parse_ddmmyyyy_hhmm_epoch(existingEndDate, existingEndTime, &existingEndEpoch)) {
+                        existingEndEpoch = (time_t)-1;
+                    }
+
+                    if (strcmp(nz(existingMachine), nz(machineName)) != 0) {
+                        printf("WriteValuesToUserArchive_V2: merge warning key=%s machine mismatch existing=%s incoming=%s; keeping existing machine\n",
+                               compositeKey, nz(existingMachine), nz(machineName));
+                    }
+
+                    if (existingStartEpoch == (time_t)-1 || incomingStartEpoch < existingStartEpoch) {
+                        strcpy(chosenStartDate, nz(startDate));
+                        strcpy(chosenStartTime, nz(startTime));
+                    } else {
+                        strcpy(chosenStartDate, nz(existingStartDate));
+                        strcpy(chosenStartTime, nz(existingStartTime));
+                    }
+
+                    if (existingEndEpoch == (time_t)-1 || incomingEndEpoch > existingEndEpoch) {
+                        strcpy(chosenEndDate, nz(plannedEndDate));
+                        strcpy(chosenEndTime, nz(plannedEndTime));
+                    } else {
+                        strcpy(chosenEndDate, nz(existingEndDate));
+                        strcpy(chosenEndTime, nz(existingEndTime));
+                    }
 
                     printf("WriteValuesToUserArchive_V2: found existing row - updating\n");
-                    printf("  existingRun=%s existingDown=%s -> mergedRun=%s mergedDown=%s\n",
-                           existingRun, existingDown, mergedRun, mergedDown);
+                    printf("WriteValuesToUserArchive_V2: merged key=%s existingRuntime=%s incomingRuntime=%s mergedRuntime=%s chosenStart=%s %s chosenEnd=%s %s action=merged\n",
+                           compositeKey, nz(existingRun), nz(runtimeHHMM), mergedRun,
+                           chosenStartDate, chosenStartTime, chosenEndDate, chosenEndTime);
 
-                    uaArchiveSetFieldValueString(hArc, F_MACHINE,       nz(machineName));
+                    uaArchiveSetFieldValueString(hArc, F_MACHINE,       nz(existingMachine));
                     uaArchiveSetFieldValueString(hArc, F_ORDER,         nz(orderNumber));
                     uaArchiveSetFieldValueString(hArc, F_SERIAL,        nz(serialNumber));
                     uaArchiveSetFieldValueString(hArc, F_OPERATION,     nz(operationNumber));
                     uaArchiveSetFieldValueString(hArc, F_PART,          nz(partNumber));
                     uaArchiveSetFieldValueString(hArc, F_RUNTIME_HHMM,  mergedRun);
-                    uaArchiveSetFieldValueString(hArc, F_DOWNTIME_HHMM, mergedDown);
-                    /* Keep first value start date/time from existing row */
-                    uaArchiveSetFieldValueString(hArc, F_START_DATE,    nz(existingStartDate[0] ? existingStartDate : startDate));
-                    uaArchiveSetFieldValueString(hArc, F_START_TIME,    nz(existingStartTime[0] ? existingStartTime : startTime));
-                    /* Keep second value planned end date/time from incoming row */
-                    uaArchiveSetFieldValueString(hArc, F_END_DATE,      nz(plannedEndDate));
-                    uaArchiveSetFieldValueString(hArc, F_END_TIME,      nz(plannedEndTime));
+                    uaArchiveSetFieldValueString(hArc, F_DOWNTIME_HHMM, nz(existingDown));
+                    uaArchiveSetFieldValueString(hArc, F_START_DATE,    chosenStartDate);
+                    uaArchiveSetFieldValueString(hArc, F_START_TIME,    chosenStartTime);
+                    uaArchiveSetFieldValueString(hArc, F_END_DATE,      chosenEndDate);
+                    uaArchiveSetFieldValueString(hArc, F_END_TIME,      chosenEndTime);
 
                     /* API does not expose per-field set status here; log payload lengths
                        so truncation/schema mismatch is diagnosable when update fails. */
                     printf("WriteValuesToUserArchive_V2: update payload lengths machine=%u order=%u serial=%u op=%u part=%u run=%u down=%u startDate=%u startTime=%u endDate=%u endTime=%u\n",
-                           (unsigned)strlen(nz(machineName)),
+                           (unsigned)strlen(nz(existingMachine)),
                            (unsigned)strlen(nz(orderNumber)),
                            (unsigned)strlen(nz(serialNumber)),
                            (unsigned)strlen(nz(operationNumber)),
                            (unsigned)strlen(nz(partNumber)),
                            (unsigned)strlen(mergedRun),
-                           (unsigned)strlen(mergedDown),
-                           (unsigned)strlen(nz(existingStartDate[0] ? existingStartDate : startDate)),
-                           (unsigned)strlen(nz(existingStartTime[0] ? existingStartTime : startTime)),
-                           (unsigned)strlen(nz(plannedEndDate)),
-                           (unsigned)strlen(nz(plannedEndTime)));
+                           (unsigned)strlen(nz(existingDown)),
+                           (unsigned)strlen(chosenStartDate),
+                           (unsigned)strlen(chosenStartTime),
+                           (unsigned)strlen(chosenEndDate),
+                           (unsigned)strlen(chosenEndTime));
 
                     writeOk = uaArchiveUpdate(hArc);
                     printf("WriteValuesToUserArchive_V2: uaArchiveUpdate result=%d\n", writeOk);
@@ -452,8 +599,8 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
                                               serialNumber,
                                               operationNumber,
                                               partNumber,
-                                              existingStartDate[0] ? existingStartDate : startDate,
-                                              existingStartTime[0] ? existingStartTime : startTime);
+                                              chosenStartDate,
+                                              chosenStartTime);
                     }
                     break;
                 }
@@ -461,7 +608,8 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
         }
 
         if (!hasExisting) {
-            printf("WriteValuesToUserArchive_V2: no existing row found - inserting new row\n");
+            printf("WriteValuesToUserArchive_V2: appended key=%s runtime=%s start=%s %s end=%s %s action=append\n",
+                   compositeKey, nz(runtimeHHMM), nz(startDate), nz(startTime), nz(plannedEndDate), nz(plannedEndTime));
             uaArchiveSetFieldValueString(hArc, F_MACHINE,       nz(machineName));
             uaArchiveSetFieldValueString(hArc, F_ORDER,         nz(orderNumber));
             uaArchiveSetFieldValueString(hArc, F_SERIAL,        nz(serialNumber));
@@ -509,7 +657,6 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
                                       startDate,
                                       startTime);
                 if (find_relaxed_candidate_under_archive_key(hArc,
-                                                             machineName,
                                                              orderNumber,
                                                              operationNumber,
                                                              partNumber,
@@ -569,18 +716,17 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
         /* Post-write deduplication with merge-or-discard for extra rows.
            Rules (applied after every write):
              - The survivor is the first matching row (already updated with the
-               incoming data in the write phase above: merged runtime/downtime,
+               incoming data in the write phase above: merged runtime,
                preserved start date/time, updated planned end date/time).
              - Extra rows (2nd, 3rd, … match) with RuntimeHHMM >= 5 min (300 s)
-               are MERGED: their runtime and downtime are folded into the survivor,
+               are MERGED: their runtime is folded into the survivor,
                then the extra row is deleted.
              - Extra rows with RuntimeHHMM < 5 min are DELETED without merging.
-           Start date/time  : survivor's value is used (kept from the write phase).
-           Planned end date/time: incoming value is used (set in the write phase). */
+           Start date/time  : earliest value is used (set in the write phase).
+           Planned end date/time: latest value is used (set in the write phase). */
         {
             long   survivorID    = -1L;
             double extraRunSecs  = 0.0;
-            double extraDownSecs = 0.0;
             int    extraMerged   = 0;
             int    deleteCount   = 0;
             int    deleteIDCount = 0;
@@ -590,21 +736,19 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
             /* Pass 1 — identify the survivor and collect extra rows */
             if (uaArchiveMoveFirst(hArc)) {
                 do {
-                    char chkMachine[64]   = "";
                     char chkOrder[64]     = "";
                     char chkSerial[64]    = "";
                     char chkOperation[64] = "";
                     char chkPart[64]      = "";
                     long rowID = -1L;
 
-                    uaArchiveGetFieldValueString(hArc, F_MACHINE,    chkMachine,    sizeof(chkMachine));
                     uaArchiveGetFieldValueString(hArc, F_ORDER,      chkOrder,      sizeof(chkOrder));
                     uaArchiveGetFieldValueString(hArc, F_SERIAL,     chkSerial,     sizeof(chkSerial));
                     uaArchiveGetFieldValueString(hArc, F_OPERATION,  chkOperation,  sizeof(chkOperation));
                     uaArchiveGetFieldValueString(hArc, F_PART,       chkPart,       sizeof(chkPart));
 
-                    if (key_matches(machineName, orderNumber, serialNumber, operationNumber, partNumber,
-                                    chkMachine, chkOrder, chkSerial, chkOperation, chkPart)) {
+                    if (key_matches(orderNumber, serialNumber, operationNumber, partNumber,
+                                    chkOrder, chkSerial, chkOperation, chkPart)) {
                         if (!uaArchiveGetFieldValueLong(hArc, 0, &rowID)) rowID = -1L;
 
                         if (survivorID == -1L) {
@@ -613,21 +757,16 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
                         } else {
                             /* Extra row: merge if runtime >= 5 min, else discard */
                             char   extraRun[16]  = "";
-                            char   extraDown[16] = "";
                             double rowRunSecs    = 0.0;
-                            double rowDownSecs   = 0.0;
 
                             uaArchiveGetFieldValueString(hArc, F_RUNTIME_HHMM,  extraRun,  sizeof(extraRun));
-                            uaArchiveGetFieldValueString(hArc, F_DOWNTIME_HHMM, extraDown, sizeof(extraDown));
                             if (!parse_hhmm_seconds(extraRun,  &rowRunSecs))  rowRunSecs  = 0.0;
-                            if (!parse_hhmm_seconds(extraDown, &rowDownSecs)) rowDownSecs = 0.0;
 
                             if (rowRunSecs >= MIN_MERGE_RUNTIME_SECONDS) {
                                 extraRunSecs  += rowRunSecs;
-                                extraDownSecs += rowDownSecs;
                                 ++extraMerged;
-                                printf("WriteValuesToUserArchive_V2: queuing merge of extra row ID=%ld rt=%s down=%s\n",
-                                       rowID, extraRun, extraDown);
+                                printf("WriteValuesToUserArchive_V2: queuing merge of extra row ID=%ld rt=%s\n",
+                                       rowID, extraRun);
                             } else {
                                 printf("WriteValuesToUserArchive_V2: discarding short extra row ID=%ld rt=%s (< 5 min)\n",
                                        rowID, extraRun);
@@ -645,34 +784,27 @@ void WriteValuesToUserArchive_V2(const char* archiveName,    /* "ProductionEvent
                 } while (uaArchiveMoveNext(hArc));
             }
 
-            /* Pass 2 — if extra rows were merged, fold their totals into the
-               survivor.  Start date/time and planned end are already correct
-               on the survivor from the write phase; only runtime/downtime change. */
+            /* Pass 2 — if extra rows were merged, fold their runtime into the
+               survivor. Start date/time and planned end are already correct
+               on the survivor from the write phase. */
             if (extraMerged > 0 && survivorID >= 0L) {
                 if (uaArchiveMoveFirst(hArc)) {
                     do {
                         long rowID = -1L;
                         if (uaArchiveGetFieldValueLong(hArc, 0, &rowID) && rowID == survivorID) {
                             char   survRun[16]   = "";
-                            char   survDown[16]  = "";
                             char   newRun[16]    = "";
-                            char   newDown[16]   = "";
                             double survRunSecs   = 0.0;
-                            double survDownSecs  = 0.0;
 
                             uaArchiveGetFieldValueString(hArc, F_RUNTIME_HHMM,  survRun,  sizeof(survRun));
-                            uaArchiveGetFieldValueString(hArc, F_DOWNTIME_HHMM, survDown, sizeof(survDown));
                             if (!parse_hhmm_seconds(survRun,  &survRunSecs))  survRunSecs  = 0.0;
-                            if (!parse_hhmm_seconds(survDown, &survDownSecs)) survDownSecs = 0.0;
 
                             seconds_to_hhmm(survRunSecs  + extraRunSecs,  newRun);
-                            seconds_to_hhmm(survDownSecs + extraDownSecs, newDown);
 
-                            printf("WriteValuesToUserArchive_V2: survivor ID=%ld adding %.0f s extra rt: %s->%s down: %s->%s\n",
-                                   survivorID, extraRunSecs, survRun, newRun, survDown, newDown);
+                            printf("WriteValuesToUserArchive_V2: survivor ID=%ld adding %.0f s extra runtime: %s->%s\n",
+                                   survivorID, extraRunSecs, survRun, newRun);
 
                             uaArchiveSetFieldValueString(hArc, F_RUNTIME_HHMM,  newRun);
-                            uaArchiveSetFieldValueString(hArc, F_DOWNTIME_HHMM, newDown);
                             if (!uaArchiveUpdate(hArc)) {
                                 printf("WriteValuesToUserArchive_V2: survivor merge update FAILED err=%d\n",
                                        uaGetLastError());
