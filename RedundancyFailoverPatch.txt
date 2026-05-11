@@ -1,0 +1,179 @@
+/* RedundancyFailoverPatch.c — WinCC V8.1 redundancy-safe live-state patch
+
+   Purpose
+   -------
+   Prevent stale runtime/downtime/start/planned-end values after a production
+   server failover.
+
+   Root cause
+   ----------
+   MainProcess currently exits immediately on the redundant server. That means
+   the standby server's internal tags (PreviousCycleTime, totalRuntime,
+   startFormatedTimeTag, estEndTotalSeconds, etc.) can become stale. When that
+   standby becomes master, it starts from old local values.
+
+   Correct behaviour
+   -----------------
+   - BOTH servers may keep local WinCC state/display tags fresh.
+   - ONLY the active master may write/archive completed production events.
+   - SYS_LastRedundancyState must remain LOCAL to each server.
+   - SYS_LastMasterRefreshTime and SYS_LastStateUpdateTime are diagnostics.
+
+   Required system tags
+   --------------------
+   SYS_LastRedundancyState      Unsigned 16-bit, local only, no redundancy sync
+   SYS_LastMasterRefreshTime    Text/String 20-30 chars
+   SYS_LastStateUpdateTime      Text/String 20-30 chars
+
+   Required machine state tags for MNA_0269
+   ----------------------------------------
+   MNA_0269_PreviousCycleTime
+   MNA_0269_PreviousPartNumber
+   MNA_0269_PreviousOperationNumber
+   MNA_0269_PreviousSerialNumber
+   MNA_0269_PreviousOrderNumber
+   MNA_0269_totalRuntime
+   MNA_0269_estEndDayTag
+   MNA_0269_estEndTimeFormatedTag
+   MNA_0269_estEndTotalSeconds
+   MNA_0269_rapFeedRateThresholdTag
+   MNA_0269_SAF_ORDER_NUM
+   MNA_0269_SAF_OP_NUM
+   MNA_0269_SAF_PART_NUM
+   MNA_0269_SAF_SERIAL_NUM
+   MNA_0269_Program_Downtime
+   MNA_0269_Program_Runtime
+   MNA_0269_PercentageTag
+   MNA_0269_startFormatedDateTag
+   MNA_0269_startFormatedTimeTag
+   MNA_0269_runFormatedTimeTag
+   MNA_0269_downFormatedTimeTag
+*/
+
+#include "apdefap.h"
+
+#define REDUNDANCY_MASTER_STATE 1
+#define SYS_LAST_REDUNDANCY_STATE_TAG "SYS_LastRedundancyState"
+#define SYS_LAST_MASTER_REFRESH_TIME_TAG "SYS_LastMasterRefreshTime"
+#define SYS_LAST_STATE_UPDATE_TIME_TAG "SYS_LastStateUpdateTime"
+
+static void WinCC_FormatNow(char* out, size_t outSize)
+{
+    time_t now;
+    struct tm* tmNow;
+
+    if (!out || outSize == 0) return;
+    out[0] = '\0';
+
+    now = time(NULL);
+    tmNow = localtime(&now);
+    if (!tmNow) return;
+
+    sprintf(out, "%04d-%02d-%02d %02d:%02d:%02d",
+            tmNow->tm_year + 1900,
+            tmNow->tm_mon + 1,
+            tmNow->tm_mday,
+            tmNow->tm_hour,
+            tmNow->tm_min,
+            tmNow->tm_sec);
+}
+
+static void WinCC_WriteNowToTag(const char* tagName)
+{
+    char text[32];
+    if (!tagName || tagName[0] == '\0') return;
+    WinCC_FormatNow(text, sizeof(text));
+    if (text[0] != '\0') {
+        SetTagChar(tagName, text);
+    }
+}
+
+/*
+   Call this once at the start of MainProcess, before any early return.
+
+   It returns:
+     1 when this server is active master
+     0 when this server is standby/redundant
+
+   Side effects:
+     - Updates SYS_LastRedundancyState locally.
+     - Writes SYS_LastMasterRefreshTime when this server becomes master.
+     - Writes SYS_LastStateUpdateTime on every successful MainProcess call.
+*/
+static int WinCC_Redundancy_UpdateRoleDiagnostics(void)
+{
+    int currentState;
+    int previousState;
+    int isMaster;
+
+    currentState = GetTagWord("@RedundantServerState");
+    previousState = GetTagWord(SYS_LAST_REDUNDANCY_STATE_TAG);
+    isMaster = (currentState == REDUNDANCY_MASTER_STATE);
+
+    if (previousState != currentState) {
+        printf("Redundancy role changed: previous=%d current=%d isMaster=%d\n",
+               previousState, currentState, isMaster);
+
+        if (isMaster) {
+            WinCC_WriteNowToTag(SYS_LAST_MASTER_REFRESH_TIME_TAG);
+        }
+    }
+
+    SetTagWord(SYS_LAST_REDUNDANCY_STATE_TAG, currentState);
+    WinCC_WriteNowToTag(SYS_LAST_STATE_UPDATE_TIME_TAG);
+
+    return isMaster ? 1 : 0;
+}
+
+/*
+   MainProcess integration patch
+   -----------------------------
+
+   1) In MainProcess, replace the current early-return block:
+
+        if (IsMasterServer() != 1) {
+            printf("MainProcess: not master server, aborting\n");
+            return;
+        }
+
+      with:
+
+        int activeMaster;
+        activeMaster = WinCC_Redundancy_UpdateRoleDiagnostics();
+
+   2) Keep the rest of MainProcess running on BOTH servers so PreviousCycleTime,
+      totalRuntime, startFormatedTimeTag, runtime/downtime display tags,
+      PercentageTag and planned end tags stay fresh locally on the standby.
+
+   3) Guard ONLY the archive write / completed-job flush logic with activeMaster.
+      In the isNew branch, change:
+
+        if (prevOp[0] || prevPart[0]) {
+            ... WriteValuesToUserArchive_V2(...)
+        }
+
+      to:
+
+        if (activeMaster && (prevOp[0] || prevPart[0])) {
+            ... WriteValuesToUserArchive_V2(...)
+        }
+
+      This preserves the rule: only master writes ProductionEvents/UserArchive.
+
+   4) Do NOT guard these live-state updates with activeMaster. They should run
+      on both servers:
+        - previous identifier update to current identifiers
+        - previousCycleTag baseline update
+        - totalRuntimeTag/runTimeTag update
+        - downTimeTag/runTimeTag display formatting
+        - UpdateStartTime
+        - CalculateEstimatedEndTime
+        - UpdateFormattedEndTime
+        - CalculateProgress
+
+   Result
+   ------
+   The redundant server keeps its local live state aligned while standby, but it
+   does not archive. After failover it already has current runtime/downtime/start
+   and planned-end state, so the screen continues correctly.
+*/
