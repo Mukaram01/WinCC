@@ -335,6 +335,15 @@ void MainProcess(
                curOrder, curSerial, curOp, curPart, isNew);
     }
 
+    /* Operator entry can briefly clear job tags between orders.
+       Do not treat incomplete current identifiers as a real new job, because
+       that would flush/reset the previous job snapshot and trigger default ETA. */
+    if (isNew && (curOrder[0] == '\0' || curOp[0] == '\0' || curPart[0] == '\0')) {
+        printf("MainProcess: current job identifiers incomplete - waiting for operator input curOrder='%s' curSerial='%s' curOp='%s' curPart='%s'\n",
+               curOrder, curSerial, curOp, curPart);
+        return;
+    }
+
     /* Sanity-check the cycle counter before using it.
        Use a small negative threshold (not 0) to avoid treating sub-second
        floating-point jitter as a genuine counter anomaly — AccumulateRuntime
